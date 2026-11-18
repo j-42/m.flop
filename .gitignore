@@ -1,0 +1,6 @@
+# Données du jeu : ne jamais les versionner (comptes, emails, paris).
+pb_data/
+# Binaire PocketBase téléchargé pour un usage hors Docker.
+pocketbase
+pocketbase_*.zip
+.DS_Store

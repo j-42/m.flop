@@ -1,0 +1,10 @@
+Dépose ici l'image d'accueil du jeu, sous le nom affiche.jpg.
+
+Elle s'affiche en haut de la page d'accueil et de la page de connexion,
+devant un soleil jaune. Format conseillé : portrait, environ 900 × 1100 pixels,
+moins de 500 Ko. Sans fichier, l'accueil s'affiche simplement sans image.
+
+Pour utiliser un autre nom ou un autre format (affiche.png, affiche.webp),
+modifie la ligne « affiche » dans pb_public/config.js.
+
+Après tout changement, reconstruire l'image Docker : docker compose up -d --build

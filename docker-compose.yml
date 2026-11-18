@@ -1,0 +1,28 @@
+services:
+  monsieur-flop:
+    build: .
+    image: monsieur-flop:latest
+    container_name: monsieur-flop
+    restart: unless-stopped
+    ports:
+      # Port de la machine hôte : modifiable avec la variable FLOP_PORT.
+      # Derrière un reverse proxy sur la même machine, préférer "127.0.0.1:${FLOP_PORT:-8090}:8090".
+      - "${FLOP_PORT:-8090}:8090"
+    volumes:
+      # Base de données, comptes, paris et sauvegardes automatiques.
+      - flop_data:/pb/pb_data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  flop_data:

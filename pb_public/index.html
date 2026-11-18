@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Monsieur Flop</title>
+  <meta name="theme-color" content="#1E2246" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0B0C1F" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='12' width='24' height='17' rx='2' fill='%2313284A'/%3E%3Crect x='10' y='14' width='12' height='2' rx='1' fill='%23fff'/%3E%3Crect x='11' y='3' width='10' height='12' rx='1' fill='%23fff' stroke='%2313284A' stroke-width='1.5'/%3E%3Ccircle cx='16' cy='8' r='2.2' fill='%23C8102E'/%3E%3C/svg%3E">
+  <link rel="preload" href="fonts/shantell.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="evitement" href="#app">Aller au contenu</a>
+  <header class="entete">
+    <a class="marque" href="#/paris" aria-label="Monsieur Flop, accueil">
+      <svg class="marque-urne" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="4" y="12" width="24" height="17" rx="2" class="urne-corps"/>
+        <rect x="10" y="14" width="12" height="2" rx="1" class="urne-fente"/>
+        <rect x="11" y="3" width="10" height="12" rx="1" class="urne-bulletin"/>
+        <circle cx="16" cy="8" r="2.2" class="urne-point"/>
+      </svg>
+      <span class="marque-nom" id="nom-jeu">Monsieur Flop</span>
+    </a>
+    <div class="entete-droite">
+    <nav class="nav" id="nav" aria-label="Navigation principale" hidden>
+      <a href="#/paris" data-nav="paris">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+        <span>Paris</span>
+      </a>
+      <a href="#/classement" data-nav="classement">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V11h4v9M10 20V5h4v15M16 20v-7h4v7"/></svg>
+        <span>Classement</span>
+      </a>
+      <a href="#/calendrier" data-nav="calendrier">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+        <span>Calendrier</span>
+      </a>
+      <a href="#/regles" data-nav="regles">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5V14M12 17.5v.01"/></svg>
+        <span>Règles</span>
+      </a>
+      <a href="#/profil" data-nav="profil">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>
+        <span>Profil</span>
+      </a>
+    </nav>
+    <button type="button" class="bouton-son" id="bouton-son" aria-pressed="true" aria-label="Couper le son">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="ondes" d="M17 8.5a5 5 0 0 1 0 7M19.5 6a8.5 8.5 0 0 1 0 12"/></svg>
+    </button>
+    </div>
+  </header>
+
+  <main id="app" tabindex="-1">
+    <p class="chargement">Chargement…</p>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="tampon" class="tampon" aria-hidden="true"><span>A parié</span></div>
+  <div id="promo" class="promo" role="dialog" aria-modal="true" aria-labelledby="promo-titre">
+    <div class="carte">
+      <div class="gros" id="promo-icone" aria-hidden="true"></div>
+      <h2 id="promo-titre">Promotion !</h2>
+      <p id="promo-texte"></p>
+      <button type="button" class="bouton bouton-jaune" id="promo-ok">Merci, merci</button>
+    </div>
+  </div>
+
+  <script src="pocketbase.umd.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
