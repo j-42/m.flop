@@ -327,6 +327,64 @@ function normaliserPari(b) {
   };
 }
 
+// ---------- Modification d'un pari sur lequel des joueurs ont déjà parié ----------
+
+// Les identifiants de réponses utilisés par un prono.
+function idsDeReponse(pari, r) {
+  if (!r) return [];
+  if (pari.type === "choix") return r.option ? [r.option] : [];
+  if (pari.type === "oui_non") return Object.keys(r.reponses || {});
+  if (pari.type === "classement") return (r.ordre || []).slice();
+  if (pari.type === "vote") return [r.vais, r.voudrais].filter(Boolean);
+  return [];
+}
+
+function memePct(a, b) {
+  const x = a === null || a === undefined ? null : Number(a);
+  const y = b === null || b === undefined ? null : Number(b);
+  return x === y;
+}
+
+// actuel : le pari enregistré ; nouveau : la version normalisée envoyée par l'admin ; pronos : ceux de ce pari.
+function verifierModifPari(actuel, nouveau, pronos, maintenant) {
+  if (!pronos.length) return;
+  const avant = {};
+  (actuel.options || []).forEach((o) => { avant[o.id] = o; });
+  const apres = {};
+  (nouveau.options || []).forEach((o) => { apres[o.id] = o; });
+
+  // Une réponse choisie par un joueur ne peut pas disparaître : son pari rapporterait 0 point sans prévenir.
+  pronos.forEach((pr) => {
+    idsDeReponse(actuel, pr.reponse).forEach((id) => {
+      if (!apres[id]) {
+        const label = avant[id] ? avant[id].label : id;
+        throw erreur("« " + label + " » a été choisi par au moins un joueur : cette réponse ne peut plus être retirée.");
+      }
+    });
+  });
+
+  if (maintenant < dateMs(actuel.cloture)) return;
+
+  // Après la clôture, les pronos sont dévoilés et les règles annoncent que les probabilités retenues
+  // sont celles affichées à la clôture : plus rien de ce qui compte pour les points ne peut bouger.
+  if (dateMs(nouveau.cloture) > maintenant) throw erreur("Ce pari est clos et les pronos ont été dévoilés : il ne peut pas être rouvert.");
+  if (Math.abs(Number(nouveau.coef) - Number(actuel.coef)) > 1e-9) throw erreur("Ce pari est clos : son coefficient ne peut plus changer.");
+  const cfgA = actuel.config || {};
+  const cfgN = nouveau.config || {};
+  ["pente", "places", "sens"].forEach((k) => {
+    if (cfgA[k] === undefined && cfgN[k] === undefined) return;
+    if (String(cfgA[k]) !== String(cfgN[k])) throw erreur("Ce pari est clos : son barème ne peut plus changer.");
+  });
+  (nouveau.options || []).forEach((o) => {
+    const a = avant[o.id];
+    if (!a) throw erreur("Ce pari est clos : on ne peut plus y ajouter de réponse (« " + o.label + " »).");
+    if (!memePct(a.pct, o.pct)) throw erreur("Ce pari est clos : la probabilité de « " + o.label + " » ne peut plus changer.");
+  });
+  (actuel.options || []).forEach((o) => {
+    if (!apres[o.id]) throw erreur("Ce pari est clos : la réponse « " + o.label + " » ne peut plus être retirée.");
+  });
+}
+
 // ---------- Statistiques dévoilées à la clôture ----------
 
 function statistiques(pari, pronos) {
@@ -542,13 +600,14 @@ function calculerTrophees(joueurs, listeJoueurs, paris, parisParId, pronos, bila
     if (!p || !pr.reponse) return;
     const j = pr.joueur;
     const etat = etatPari(p, maintenant);
+    // Tant qu'un pari est ouvert, les trophées n'en tiennent pas compte : un compteur qui bouge
+    // (Kamikaze, Girouette) trahirait ce qu'un joueur vient de parier avant la clôture.
+    if (etat !== "clos" && etat !== "resolu") return;
     girouette[j] = (girouette[j] || 0) + pr.modifs;
 
-    if (etat === "clos" || etat === "resolu") {
-      const cloture = dateMs(p.cloture);
-      const maj = dateMs(pr.maj);
-      if (maj && cloture - maj <= 3600 * 1000 && cloture - maj >= 0) retardataire[j] = (retardataire[j] || 0) + 1;
-    }
+    const cloture = dateMs(p.cloture);
+    const maj = dateMs(pr.maj);
+    if (maj && cloture - maj <= 3600 * 1000 && cloture - maj >= 0) retardataire[j] = (retardataire[j] || 0) + 1;
 
     // Kamikaze : réponses sur des probabilités inférieures à 10 %.
     const options = p.options || [];
@@ -687,7 +746,7 @@ module.exports = {
   lireJSON, dateMs, versISO, erreur,
   pariDepuisRecord, pronoDepuisRecord, joueurDepuisRecord,
   etatPari, estDevoile, pointsProba, calculerPoints,
-  normaliserReponse, normaliserResultat, normaliserPari,
+  normaliserReponse, normaliserResultat, normaliserPari, verifierModifPari,
   statistiques, issueDuel, classementComplet,
   trouver, tous, exigerAdmin, stable, recalculerPoints,
   guildeDepuisRecord, candidatDepuisRecord, duelDepuisRecord,

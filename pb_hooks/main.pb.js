@@ -38,14 +38,13 @@ routerAdd("POST", "/api/jeu/inscription", (e) => {
   if (mdp.length < 10) throw new BadRequestError("Le mot de passe doit faire au moins 10 caractères.");
   if (!lib.trouver("guildes", "id = {:g}", { g: guildeId })) throw new BadRequestError("Choisis ta guilde.");
 
-  const premier = $app.countRecords("users") === 0;
-  let invitation = null;
-  if (!premier) {
-    invitation = lib.trouver("invitations", "code = {:c}", { c: code });
-    if (!invitation) throw new BadRequestError("Ce code d’invitation est inconnu.");
-    if (invitation.getInt("utilisations") >= invitation.getInt("utilisations_max")) {
-      throw new BadRequestError("Ce code d’invitation a déjà servi le nombre de fois prévu.");
-    }
+  const MSG_CODE_INCONNU = "Ce code d’invitation est inconnu.";
+  const MSG_CODE_EPUISE = "Ce code d’invitation a déjà servi le nombre de fois prévu.";
+  // Contrôles rapides, pour des messages d'erreur précis. Ils sont refaits dans la transaction plus bas.
+  if ($app.countRecords("users") > 0) {
+    const invitation = lib.trouver("invitations", "code = {:c}", { c: code });
+    if (!invitation) throw new BadRequestError(MSG_CODE_INCONNU);
+    if (invitation.getInt("utilisations") >= invitation.getInt("utilisations_max")) throw new BadRequestError(MSG_CODE_EPUISE);
   }
   if (lib.trouver("users", "email = {:e}", { e: email })) throw new BadRequestError("Un compte existe déjà avec cet email.");
   if (lib.trouver("users", "pseudo = {:p}", { p: pseudo })) throw new BadRequestError("Ce pseudo est déjà pris.");
@@ -55,20 +54,35 @@ routerAdd("POST", "/api/jeu/inscription", (e) => {
   u.setPassword(mdp);
   u.set("pseudo", pseudo);
   u.set("guilde", guildeId);
-  u.set("role", premier ? "admin" : "joueur");
   u.set("verified", true);
 
+  // Les écritures de PocketBase passent une par une : refaire ici les vérifications empêche deux inscriptions
+  // simultanées de créer deux admins, ou de dépasser le nombre d'utilisations d'un code.
+  let premier = false;
+  let refus = "";
   try {
     $app.runInTransaction((tx) => {
-      tx.save(u);
-      if (invitation) {
-        const inv = tx.findRecordById("invitations", invitation.id);
+      premier = tx.countRecords("users") === 0;
+      if (!premier) {
+        let inv = null;
+        try {
+          inv = tx.findFirstRecordByFilter("invitations", "code = {:c}", { c: code });
+        } catch (err) {
+          refus = MSG_CODE_INCONNU;
+          throw err;
+        }
+        if (inv.getInt("utilisations") >= inv.getInt("utilisations_max")) {
+          refus = MSG_CODE_EPUISE;
+          throw new Error(refus);
+        }
         inv.set("utilisations", inv.getInt("utilisations") + 1);
         tx.save(inv);
       }
+      u.set("role", premier ? "admin" : "joueur");
+      tx.save(u);
     });
   } catch (err) {
-    throw new BadRequestError("Inscription impossible : ce pseudo ou cet email est peut-être déjà utilisé.");
+    throw new BadRequestError(refus || "Inscription impossible : ce pseudo ou cet email est peut-être déjà utilisé.");
   }
   return e.json(200, { ok: true, admin: premier });
 });
@@ -216,8 +230,9 @@ routerAdd("POST", "/api/jeu/admin/pari", (e) => {
     rec = lib.trouver("paris", "id = {:id}", { id: String(b.id) });
     if (!rec) throw new NotFoundError("Ce pari n’existe pas.");
     const actuel = lib.pariDepuisRecord(rec);
-    const nbPronos = lib.tous("pronos", "pari = {:p}", "", { p: rec.id }).length;
-    if (nbPronos > 0 && actuel.type !== d.type) throw new BadRequestError("Impossible de changer le type : des joueurs ont déjà parié.");
+    const pronosPari = lib.tous("pronos", "pari = {:p}", "", { p: rec.id }).map(lib.pronoDepuisRecord);
+    if (pronosPari.length > 0 && actuel.type !== d.type) throw new BadRequestError("Impossible de changer le type : des joueurs ont déjà parié.");
+    lib.verifierModifPari(actuel, d, pronosPari, Date.now());
     if (actuel.statut === "resolu") d.statut = "resolu";
   } else {
     rec = new Record($app.findCollectionByNameOrId("paris"));
@@ -257,6 +272,8 @@ routerAdd("POST", "/api/jeu/admin/annuler-resultat", (e) => {
   const b = e.requestInfo().body || {};
   const rec = lib.trouver("paris", "id = {:id}", { id: String(b.pari || "") });
   if (!rec) throw new NotFoundError("Ce pari n’existe pas.");
+  // Sinon un brouillon passerait en « publié » sans le contrôle des probabilités fait à la publication.
+  if (rec.getString("statut") !== "resolu") throw new BadRequestError("Ce pari n’a pas de résultat à annuler.");
   rec.set("resultat", null);
   rec.set("statut", "publie");
   rec.set("resolu_le", "");
