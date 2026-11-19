@@ -1200,6 +1200,7 @@
       "<h3>Deux joueurs ont le même nombre de points ?</h3><p>Ils partagent le même rang.</p>" +
       "<h3>Un candidat se retire alors que j’ai parié sur lui ?</h3><p>Ton pari reste valable. S’il n’est pas sur la liste officielle, il ne peut pas finir sur le podium : la réponse rapporte 0 point.</p>" +
       "<h3>Qui fixe les probabilités ?</h3><p>L’admin du jeu, d’après les sondages publiés. Elles sont visibles par tout le monde sur chaque pari, et ne peuvent plus changer dès qu’un joueur a parié.</p>" +
+      "<h3>Je peux changer de pseudo ?</h3><p>Oui, dans ton Profil. Tes paris, tes points et tes duels te suivent. Ta guilde, elle, ne change pas.</p>" +
       "<h3>J’ai oublié mon mot de passe.</h3><p>Demande à l’admin du jeu : il peut le réinitialiser.</p>" +
       "<h3>Un résultat me semble faux.</h3><p>Signale-le à l’admin : il peut corriger le résultat, et les points sont recalculés.</p></section>" +
 
@@ -1242,6 +1243,11 @@
           (p.etat === "resolu" && p.type !== "vote" ? nb(p.monProno.points) : '<span class="discret">' + (p.type === "vote" ? "sans points" : "en attente") + "</span>") + "</td></tr>").join("") +
         "</tbody></table></div>"
       : '<div class="vide"><p>Tu n’as encore parié sur rien.</p><p><a href="#/paris">Voir les paris ouverts</a></p></div>');
+    html += "<h2>Changer de pseudo</h2>" +
+      '<form class="carte" data-form="pseudo" novalidate>' +
+      '<label class="champ"><span>Pseudo</span><input type="text" name="pseudo" value="' + esc(e.moi.pseudo) + '" minlength="2" maxlength="30" autocomplete="nickname" required><small>Entre 2 et 30 caractères. Tes paris, tes points et tes duels te suivent.</small></label>' +
+      '<div class="erreur-form" aria-live="polite"></div>' +
+      '<button class="bouton" type="submit">Changer le pseudo</button></form>';
     html += "<h2>Changer de mot de passe</h2>" +
       '<form class="carte" data-form="motdepasse" novalidate>' +
       '<label class="champ"><span>Mot de passe actuel</span><input type="password" name="ancien" autocomplete="current-password" required></label>' +
@@ -1839,6 +1845,18 @@
         S.inscriptionGuilde = "";
         notifier("Bienvenue dans le jeu !");
         aller("#/paris");
+      } catch (err) {
+        erreurForm(f, err.message);
+      }
+    },
+    pseudo: async (f) => {
+      const pseudo = f.pseudo.value.trim().replace(/\s+/g, " ");
+      if (pseudo.length < 2 || pseudo.length > 30) return erreurForm(f, "Le pseudo doit faire entre 2 et 30 caractères.");
+      try {
+        const res = await api("/api/jeu/pseudo", { method: "POST", body: { pseudo: pseudo } });
+        invalider();
+        notifier(res.inchange ? "C’est déjà ton pseudo." : "Tu t’appelles désormais " + res.pseudo + ".");
+        await vueProfil();
       } catch (err) {
         erreurForm(f, err.message);
       }

@@ -183,6 +183,28 @@ routerAdd("POST", "/api/jeu/retirer", (e) => {
   return e.json(200, { ok: true });
 }, $apis.requireAuth("users"));
 
+// ---------- Joueur connecté : changer de pseudo ----------
+// Les pronos, duels et classements désignent les joueurs par leur identifiant : changer de pseudo ne casse rien.
+// La collection users interdit toujours de modifier le pseudo directement : tout passe par cette route.
+routerAdd("POST", "/api/jeu/pseudo", (e) => {
+  const lib = require(`${__hooks}/jeu_lib.js`);
+  const b = e.requestInfo().body || {};
+  const pseudo = String(b.pseudo || "").trim().replace(/\s+/g, " ");
+  if (pseudo.length < 2 || pseudo.length > 30) throw new BadRequestError("Le pseudo doit faire entre 2 et 30 caractères.");
+  const u = $app.findRecordById("users", e.auth.id);
+  if (u.getString("pseudo") === pseudo) return e.json(200, { ok: true, pseudo: pseudo, inchange: true });
+  const DEJA_PRIS = "Ce pseudo est déjà pris.";
+  if (lib.trouver("users", "pseudo = {:p} && id != {:id}", { p: pseudo, id: u.id })) throw new BadRequestError(DEJA_PRIS);
+  u.set("pseudo", pseudo);
+  try {
+    $app.save(u);
+  } catch (err) {
+    // L'index unique ignore la casse : « Paul » et « paul » ne peuvent pas coexister.
+    throw new BadRequestError(DEJA_PRIS);
+  }
+  return e.json(200, { ok: true, pseudo: pseudo });
+}, $apis.requireAuth("users"));
+
 // ---------- Joueur connecté : lancer un duel ----------
 routerAdd("POST", "/api/jeu/duel", (e) => {
   const lib = require(`${__hooks}/jeu_lib.js`);

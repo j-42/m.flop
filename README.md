@@ -4,6 +4,8 @@ Jeu de pronostics entre amis sur la présidentielle 2027. Les joueurs parient su
 
 L’application tient dans un seul conteneur : PocketBase, qui gère le serveur web, la base SQLite, les comptes et le tableau de bord d’administration, plus le code du jeu.
 
+Ce dépôt est un fork de [j-42/m.flop](https://github.com/j-42/m.flop). Les bugs corrigés et les règles modifiées depuis sont listés dans [CORRECTIFS.md](CORRECTIFS.md).
+
 ## Déploiement
 
 ### Prérequis
