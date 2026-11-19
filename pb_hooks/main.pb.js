@@ -111,6 +111,7 @@ routerAdd("GET", "/api/jeu/etat", (e) => {
       const pr = pronosPari.filter((x) => x.joueur === id)[0];
       return pr ? pr.points : 0;
     };
+    const aParie = (id) => pronosPari.some((x) => x.joueur === id);
     const sortie = Object.assign({}, p, {
       etat: etat,
       devoile: devoile,
@@ -118,7 +119,7 @@ routerAdd("GET", "/api/jeu/etat", (e) => {
       monProno: mien ? { reponse: mien.reponse, points: mien.points, modifs: mien.modifs, maj: mien.maj } : null,
       duels: duels
         .filter((d) => d.pari === p.id && (d.lanceur === moi.id || d.adversaire === moi.id))
-        .map((d) => Object.assign({}, d, lib.issueDuel(d, etat, pointsDe))),
+        .map((d) => Object.assign({}, d, lib.issueDuel(d, etat, pointsDe, aParie))),
     });
     if (p.statut !== "resolu") sortie.resultat = null;
     if (devoile) {

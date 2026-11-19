@@ -78,9 +78,12 @@
     else t = Math.round(abs / 86400000) + " jours";
     return d >= 0 ? "dans " + t : "il y a " + t;
   }
+  // Ces deux valeurs doivent rester égales à PLAFOND_POINTS et MAX_OUI_NON dans pb_hooks/jeu_lib.js.
+  const PLAFOND_POINTS = 300;
+  const MAX_OUI_NON = 10;
   function pointsProba(pct) {
     const p = Math.min(99, Math.max(1, Number(pct) || 50));
-    return Math.round(1000 / p);
+    return Math.min(PLAFOND_POINTS, Math.round(1000 / p));
   }
   function avecCoef(pari, base) { return Math.round(base * (Number(pari.coef) || 1)); }
   function coefTxt(c) { return "×" + String(c).replace(".", ","); }
@@ -647,7 +650,7 @@
   function explicationCourte(p) {
     const c = Number(p.coef) !== 1 ? " Les points de ce pari sont multipliés par " + String(p.coef).replace(".", ",") + "." : "";
     if (p.type === "choix") return "Une seule réponse. Si c’est la bonne, tu gagnes 10 ÷ sa probabilité : le gain est affiché sur chaque bulletin." + c;
-    if (p.type === "oui_non") return "Oui ou non pour chaque nom, ou tu passes. Chaque bonne réponse rapporte 10 ÷ la probabilité de ta réponse. La probabilité affichée est celle du oui." + c;
+    if (p.type === "oui_non") return "Oui ou non pour " + MAX_OUI_NON + " noms au plus : choisis ceux dont tu es le plus sûr. Chaque bonne réponse rapporte 10 ÷ la probabilité de ta réponse. La probabilité affichée est celle du oui." + c;
     if (p.type === "classement") return "Place les noms dans l’ordre. À la bonne place : 10 ÷ probabilité. Dans le classement mais mal placé : la moitié." + c;
     if (p.type === "estimation") {
       const pente = Number(p.config.pente) || 10;
@@ -688,7 +691,7 @@
     if (p.type === "oui_non") {
       const reps = s.reponses || {};
       const n = Object.keys(reps).length;
-      return '<p class="discret petit">' + nb(n) + " réponse" + (n > 1 ? "s" : "") + " sur " + opts.length + "." + (n ? ' <button type="button" class="bouton-lien" data-action="on-effacer" data-pari="' + esc(p.id) + '"' + dis + ">Tout effacer</button>" : "") + "</p>" +
+      return '<p class="discret petit">' + nb(n) + " réponse" + (n > 1 ? "s" : "") + " sur " + Math.min(MAX_OUI_NON, opts.length) + " possibles." + (n ? ' <button type="button" class="bouton-lien" data-action="on-effacer" data-pari="' + esc(p.id) + '"' + dis + ">Tout effacer</button>" : "") + "</p>" +
         champFiltre(p) + '<div class="oui-non">' +
         opts.map((o) => {
           const v = reps[o.id] || "";
@@ -922,12 +925,13 @@
     const joueurs = parId(e.joueurs);
     const mes = p.duels || [];
     let html = '<div class="section-titre"><h2>Duels</h2></div>';
-    html += '<p class="discret petit">Défie un joueur sur ce pari : celui de vous deux qui marque le plus de points gagne le duel. Les duels comptent pour le trophée du Duelliste, pas pour les points.</p>';
+    html += '<p class="discret petit">Défie un joueur sur ce pari : celui de vous deux qui marque le plus de points gagne le duel. Si l’un de vous deux n’a pas parié, le duel est annulé. Les duels comptent pour le trophée du Duelliste, pas pour les points.</p>';
     if (mes.length) {
       html += '<ul class="barres" style="margin-bottom:1rem">' + mes.map((d) => {
         const autre = d.lanceur === e.moi.id ? d.adversaire : d.lanceur;
         const nom = (joueurs[autre] || {}).pseudo || "?";
         let issue = "En cours";
+        if (d.statut === "annule") issue = "Annulé : l’un de vous deux n’a pas parié";
         if (d.statut === "nul") issue = "Égalité, " + nb(d.pointsLanceur) + " partout";
         if (d.statut === "termine") {
           const mesPts = d.lanceur === e.moi.id ? d.pointsLanceur : d.pointsAdversaire;
@@ -1150,20 +1154,20 @@
 
       '<section id="r-points"><h2>Les points</h2>' +
       "<p>Pour chaque réponse possible, l’admin du jeu indique une probabilité établie d’après les sondages. Elle est affichée sur chaque réponse, avec le nombre de points qu’elle rapporte.</p>" +
-      '<div class="formule">Points gagnés = 10 ÷ <b>probabilité</b></div>' +
-      "<p>Une réponse donnée à 41 % rapporte 10 ÷ 0,41, soit 24 points. Plus la réponse est improbable, plus elle rapporte.</p>" +
+      '<div class="formule">Points gagnés = 10 ÷ <b>probabilité</b>, au plus ' + PLAFOND_POINTS + "</div>" +
+      "<p>Une réponse donnée à 41 % rapporte 10 ÷ 0,41, soit 24 points. Plus la réponse est improbable, plus elle rapporte, jusqu’à " + PLAFOND_POINTS + " points : sous 3,4 % environ, le gain ne monte plus. Le classement ne se joue donc pas à la loterie sur un outsider.</p>" +
       '<div class="carte calculette"><label class="champ" style="margin:0"><span>Essaie avec une probabilité</span>' +
       '<input type="range" min="1" max="99" value="20" data-input="calc-pct" aria-describedby="calc-sortie"></label>' +
       '<output id="calc-sortie">50<small>points à 20 %</small></output></div>' +
       '<table class="exemples"><thead><tr><th>Probabilité</th><th>Points</th></tr></thead><tbody>' +
       exemples.map((p) => "<tr><td>" + pctTxt(p) + "</td><td>" + nb(pointsProba(p)) + "</td></tr>").join("") + "</tbody></table>" +
       "<p>Certains paris ont un <strong>coefficient</strong>, affiché sur le pari : les points sont multipliés par ce nombre. Un pari ×2 compte double, un pari ×0,2 compte cinq fois moins. Les gains affichés sur chaque réponse tiennent déjà compte du coefficient.</p>" +
-      "<p>Les probabilités prises en compte sont celles affichées à la clôture du pari.</p></section>" +
+      "<p>Les probabilités, comme le coefficient, sont figées dès qu’un premier joueur a parié : les gains affichés au moment où tu paries sont ceux que tu toucheras.</p></section>" +
 
       '<section id="r-types"><h2>Les types de paris</h2>' +
       '<h3 id="r-choix">Un seul choix</h3><p>Tu choisis une réponse parmi les bulletins. Si c’est la bonne, tu gagnes 10 ÷ sa probabilité.</p>' +
       '<p class="discret">Exemple : pour « Le Boulet », tu choisis un candidat donné à 5 %. S’il fait bien le plus petit score, tu gagnes 200 points.</p>' +
-      '<h3 id="r-oui-non">Oui ou non</h3><p>Pour chaque nom de la liste, tu réponds oui ou non, ou tu passes. La probabilité affichée est celle du oui ; celle du non est le reste jusqu’à 100 %. Chaque bonne réponse rapporte ses points, et ils s’additionnent.</p>' +
+      '<h3 id="r-oui-non">Oui ou non</h3><p>Tu choisis jusqu’à ' + MAX_OUI_NON + ' noms de la liste, et pour chacun tu réponds oui ou non. Garde ceux dont tu es le plus sûr. La probabilité affichée est celle du oui ; celle du non est le reste jusqu’à 100 %. Chaque bonne réponse rapporte ses points, et ils s’additionnent.</p>' +
       '<p class="discret">Exemple : un candidat est donné à 30 % d’avoir ses signatures. Un oui juste rapporte 10 ÷ 0,30, soit 33 points. Un non juste rapporte 10 ÷ 0,70, soit 14 points. Comme ce pari compte beaucoup de noms, il a souvent un coefficient réduit.</p>' +
       '<h3 id="r-classement">Classement</h3><p>Tu places des noms dans l’ordre, par exemple le podium ou le flop 3 du 1er tour. La probabilité affichée est celle que le nom figure dans ce classement.</p>' +
       "<ul><li>Nom à la bonne place : 10 ÷ probabilité.</li><li>Nom présent dans le classement mais mal placé : la moitié.</li><li>Nom absent du classement : 0.</li></ul>" +
@@ -1180,7 +1184,7 @@
       "<p>Les points sont calculés quand l’admin saisit le résultat officiel. Si un résultat est corrigé, les points de tout le monde sont recalculés automatiquement.</p></section>" +
 
       '<section id="r-duels"><h2>Les duels</h2>' +
-      "<p>Sur un pari ouvert, tu peux défier un autre joueur. Une fois le résultat connu, celui de vous deux qui a marqué le plus de points sur ce pari gagne le duel. À points égaux, c’est un match nul. Les duels ne rapportent pas de points : ils comptent pour le trophée du Duelliste.</p></section>" +
+      "<p>Sur un pari ouvert, tu peux défier un autre joueur. Une fois le résultat connu, celui de vous deux qui a marqué le plus de points sur ce pari gagne le duel. À points égaux, c’est un match nul. Si l’un de vous deux n’a pas parié, le duel est annulé et ne compte pour personne. Les duels ne rapportent pas de points : ils comptent pour le trophée du Duelliste.</p></section>" +
 
       '<section id="r-guildes"><h2>Les guildes</h2>' +
       "<p>À l’inscription, chaque joueur choisit sa guilde, une fois pour toutes. Le classement des guildes se fait sur la moyenne des points de leurs membres : une petite guilde a autant de chances qu’une grande. Le classement général reste individuel.</p></section>" +
@@ -1195,7 +1199,7 @@
       '<section id="r-questions"><h2>Questions fréquentes</h2>' +
       "<h3>Deux joueurs ont le même nombre de points ?</h3><p>Ils partagent le même rang.</p>" +
       "<h3>Un candidat se retire alors que j’ai parié sur lui ?</h3><p>Ton pari reste valable. S’il n’est pas sur la liste officielle, il ne peut pas finir sur le podium : la réponse rapporte 0 point.</p>" +
-      "<h3>Qui fixe les probabilités ?</h3><p>L’admin du jeu, d’après les sondages publiés. Elles sont visibles par tout le monde sur chaque pari.</p>" +
+      "<h3>Qui fixe les probabilités ?</h3><p>L’admin du jeu, d’après les sondages publiés. Elles sont visibles par tout le monde sur chaque pari, et ne peuvent plus changer dès qu’un joueur a parié.</p>" +
       "<h3>J’ai oublié mon mot de passe.</h3><p>Demande à l’admin du jeu : il peut le réinitialiser.</p>" +
       "<h3>Un résultat me semble faux.</h3><p>Signale-le à l’admin : il peut corriger le résultat, et les points sont recalculés.</p></section>" +
 
@@ -1309,7 +1313,9 @@
     const cfg = ed.config || {};
     const choixSelect = (champ, valeurs, actuel) => '<select data-ed="' + champ + '" data-cle="ed-' + champ + '">' + Object.keys(valeurs).map((k) => '<option value="' + k + '"' + (k === actuel ? " selected" : "") + ">" + esc(valeurs[k]) + "</option>").join("") + "</select>";
     let html = '<a class="retour" href="#/admin/paris">' + ICONES.retour + "Tous les paris</a><h1>" + (ed.id ? "Modifier le pari" : "Nouveau pari") + "</h1>";
-    if (ed.nbParieurs) html += '<div class="message message-info">' + pluriel(ed.nbParieurs, "joueur a", "joueurs ont") + " déjà parié : le type ne peut plus changer. Les probabilités retenues pour les points sont celles en place à la clôture.</div>";
+    if (ed.nbParieurs) html += '<div class="message message-info">' + pluriel(ed.nbParieurs, "joueur a", "joueurs ont") + " déjà parié : le type, le coefficient, le barème et les probabilités ne peuvent plus changer." +
+      (ed.type === "oui_non" || ed.type === "vote" ? " Tu peux encore ajouter des noms tant que le pari est ouvert." : " Tu ne peux plus ajouter de réponse.") +
+      " Le titre, la description et les libellés restent modifiables.</div>";
     html += '<fieldset><legend>Le pari</legend>' +
       '<label class="champ"><span>Titre</span><input type="text" maxlength="150" value="' + esc(ed.titre) + '" data-ed="titre" data-cle="ed-titre"></label>' +
       '<label class="champ"><span>Description</span><textarea maxlength="2000" data-ed="description" data-cle="ed-description">' + esc(ed.description) + "</textarea><small>Ce que les joueurs doivent savoir pour parier : la question précise, la source du résultat.</small></label>" +
@@ -1510,6 +1516,10 @@
       const s = saisieDe(p);
       s.reponses = s.reponses || {};
       if (s.reponses[el.dataset.option] === el.dataset.val) delete s.reponses[el.dataset.option];
+      else if (s.reponses[el.dataset.option] === undefined && Object.keys(s.reponses).length >= MAX_OUI_NON) {
+        notifier("Tu as déjà répondu pour " + MAX_OUI_NON + " noms : retire-en un pour en choisir un autre.", true);
+        return;
+      }
       else s.reponses[el.dataset.option] = el.dataset.val;
       Son.pop();
       rafraichirPari(p);
