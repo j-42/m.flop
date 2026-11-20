@@ -4,6 +4,8 @@ Jeu de pronostics entre amis sur la présidentielle 2027. Les joueurs parient su
 
 L’application tient dans un seul conteneur : PocketBase, qui gère le serveur web, la base SQLite, les comptes et le tableau de bord d’administration, plus le code du jeu.
 
+Ce dépôt est un fork de [j-42/m.flop](https://github.com/j-42/m.flop). Les bugs corrigés et les règles modifiées depuis sont listés dans [CORRECTIFS.md](CORRECTIFS.md).
+
 ## Déploiement
 
 ### Prérequis
@@ -116,7 +118,7 @@ Sans fichier `perso/affiche.jpg`, l’accueil s’affiche sans image.
 ### Avant d’inviter
 
 1. Dans **Profil**, puis **Administration**, onglet **Paris**, ouvrir chaque brouillon.
-2. Vérifier les dates, remplir une probabilité par réponse, cocher **Publié** et enregistrer. La publication est refusée tant qu’une probabilité manque.
+2. Vérifier les dates, remplir une probabilité par réponse, cocher **Publié** et enregistrer. La publication est refusée tant qu’une probabilité manque, ou si les probabilités d’un pari à choix ne font pas environ 100 % (100 % par place pour un classement, à 5 points près). Dès qu’un joueur a parié, les probabilités et le coefficient sont figés : les vérifier avant d’ouvrir le pari.
 3. Les paris du 1er tour attendent la liste officielle du Conseil constitutionnel. Le moment venu, mettre à jour le statut des candidats dans l’onglet **Candidats**, puis utiliser **Ajouter les officiels seulement** dans chaque pari.
 4. Onglet **Invitations** : créer un code par personne, ou un code de groupe utilisable plusieurs fois. **Copier l’invitation** prépare un message avec le lien et le code.
 
@@ -161,7 +163,8 @@ perso/                Image d’accueil
 | Le conteneur n’est pas `healthy` | `docker compose logs monsieur-flop` |
 | « Trop de tentatives » pour tout le monde | En-tête de proxy de confiance non renseigné, voir Mise en ligne |
 | Un pari n’apparaît pas aux joueurs | Brouillon, ou date d’ouverture pas encore passée |
-| Publication refusée | Une probabilité manque, ou pas assez de réponses |
+| Publication refusée | Une probabilité manque, leur total s’écarte trop de 100 %, ou pas assez de réponses |
+| Modification refusée | Des joueurs ont déjà parié : probabilités, coefficient et barème sont figés |
 | Saisie du résultat refusée | Le pari n’est pas encore clos |
 | Architecture non prise en charge au build | Construire pour `linux/amd64`, `linux/arm64` ou `linux/arm/v7` |
 

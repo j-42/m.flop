@@ -229,7 +229,7 @@ migrate((app) => {
     },
     {
       titre: "Qui aura ses 500 signatures ?", type: "oui_non", phase: "parrainages",
-      description: "Pour chaque candidat, réponds oui ou non : sera-t-il sur la liste officielle du Conseil constitutionnel ? Tu peux ne répondre que pour certains.",
+      description: "Pour chaque candidat, réponds oui ou non : sera-t-il sur la liste officielle du Conseil constitutionnel ? Tu réponds pour 10 noms au plus : garde ceux dont tu es le plus sûr.",
       ouverture: maintenant, cloture: FIN_PARRAINAGES, coef: 0.2, options: optionsCandidats, config: {},
     },
     {

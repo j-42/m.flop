@@ -5,6 +5,15 @@ const TYPES = ["choix", "oui_non", "classement", "estimation", "vote"];
 const PHASES = ["campagne", "parrainages", "premier_tour", "second_tour"];
 const STATUTS_CANDIDAT = ["declare", "officiel", "non_retenu", "retire"];
 
+// Une réponse rapporte au plus ce nombre de points (avant coefficient) : au-delà, le classement
+// se jouerait à la loterie sur les outsiders à 1 ou 2 %. Le plafond s'applique sous 3,4 % environ.
+const PLAFOND_POINTS = 300;
+// Sur un pari oui ou non, un joueur répond pour ce nombre de noms au plus. Une mauvaise réponse
+// ne coûtant rien, il serait sinon toujours gagnant de répondre pour toute la liste.
+const MAX_OUI_NON = 10;
+// Écart toléré, en points de pourcentage, entre la somme des probabilités et 100 % (par place pour un classement).
+const TOLERANCE_SOMME = 5;
+
 // ---------- Outils ----------
 
 function lireJSON(rec, champ, defaut) {
@@ -104,10 +113,10 @@ function estDevoile(pari, etat) {
 
 // ---------- Calcul des points ----------
 
-// 10 ÷ probabilité : 50 % → 20 points, 10 % → 100 points, 1 % → 1000 points.
+// 10 ÷ probabilité, plafonné : 50 % → 20 points, 10 % → 100 points, 1 % → 300 points (au lieu de 1000).
 function pointsProba(pct) {
   const p = Math.min(99, Math.max(1, Number(pct) || 50));
-  return Math.round(1000 / p);
+  return Math.min(PLAFOND_POINTS, Math.round(1000 / p));
 }
 
 function trouverOption(options, id) {
@@ -178,6 +187,7 @@ function normaliserReponse(pari, r) {
       }
     });
     if (!n) throw erreur("Réponds oui ou non pour au moins un nom.");
+    if (n > MAX_OUI_NON) throw erreur("Tu peux répondre pour " + MAX_OUI_NON + " noms au plus : garde ceux dont tu es le plus sûr.");
     return { reponses: sortie };
   }
   if (pari.type === "classement") {
@@ -311,6 +321,17 @@ function normaliserPari(b) {
         if (o.pct === null) throw erreur("Indique la probabilité de « " + o.label + " » avant de publier.");
       });
     }
+    // Une seule réponse est juste : les probabilités doivent faire 100 %. Pour un classement, chaque place
+    // est occupée par un nom : elles font 100 % par place. Sinon les gains affichés seraient faux.
+    if (b.type === "choix" || b.type === "classement") {
+      const attendu = b.type === "choix" ? 100 : 100 * config.places;
+      const tolerance = b.type === "choix" ? TOLERANCE_SOMME : TOLERANCE_SOMME * config.places;
+      const somme = Math.round(options.reduce((s, o) => s + Number(o.pct), 0) * 10) / 10;
+      if (Math.abs(somme - attendu) > tolerance) {
+        throw erreur("Les probabilités font " + String(somme).replace(".", ",") + " % au total : il faut environ " + attendu + " %" +
+          (b.type === "classement" ? " (100 % par place)" : "") + ", à " + tolerance + " points près.");
+      }
+    }
   }
 
   return {
@@ -325,6 +346,74 @@ function normaliserPari(b) {
     config: config,
     statut: statut,
   };
+}
+
+// ---------- Modification d'un pari sur lequel des joueurs ont déjà parié ----------
+
+// Les identifiants de réponses utilisés par un prono.
+function idsDeReponse(pari, r) {
+  if (!r) return [];
+  if (pari.type === "choix") return r.option ? [r.option] : [];
+  if (pari.type === "oui_non") return Object.keys(r.reponses || {});
+  if (pari.type === "classement") return (r.ordre || []).slice();
+  if (pari.type === "vote") return [r.vais, r.voudrais].filter(Boolean);
+  return [];
+}
+
+function memePct(a, b) {
+  const x = a === null || a === undefined ? null : Number(a);
+  const y = b === null || b === undefined ? null : Number(b);
+  return x === y;
+}
+
+// actuel : le pari enregistré ; nouveau : la version normalisée envoyée par l'admin ; pronos : ceux de ce pari.
+function verifierModifPari(actuel, nouveau, pronos, maintenant) {
+  if (!pronos.length) return;
+  const avant = {};
+  (actuel.options || []).forEach((o) => { avant[o.id] = o; });
+  const apres = {};
+  (nouveau.options || []).forEach((o) => { apres[o.id] = o; });
+
+  // Une réponse choisie par un joueur ne peut pas disparaître : son pari rapporterait 0 point sans prévenir.
+  pronos.forEach((pr) => {
+    idsDeReponse(actuel, pr.reponse).forEach((id) => {
+      if (!apres[id]) {
+        const label = avant[id] ? avant[id].label : id;
+        throw erreur("« " + label + " » a été choisi par au moins un joueur : cette réponse ne peut plus être retirée.");
+      }
+    });
+  });
+
+  // Dès le premier pari posé, ce qui compte pour les points est figé : l'admin, qui joue aussi,
+  // ne peut plus changer les gains d'un pari après avoir vu partir les mises.
+  const deja = "Des joueurs ont déjà parié : ";
+  if (Math.abs(Number(nouveau.coef) - Number(actuel.coef)) > 1e-9) throw erreur(deja + "le coefficient ne peut plus changer.");
+  const cfgA = actuel.config || {};
+  const cfgN = nouveau.config || {};
+  ["pente", "places", "sens"].forEach((k) => {
+    if (cfgA[k] === undefined && cfgN[k] === undefined) return;
+    if (String(cfgA[k]) !== String(cfgN[k])) throw erreur(deja + "le barème ne peut plus changer.");
+  });
+  (nouveau.options || []).forEach((o) => {
+    const a = avant[o.id];
+    if (a && !memePct(a.pct, o.pct)) throw erreur(deja + "la probabilité de « " + o.label + " » ne peut plus changer.");
+  });
+
+  const clos = maintenant >= dateMs(actuel.cloture);
+  // Sur un pari à choix ou un classement, les probabilités font 100 % ensemble : une nouvelle réponse
+  // obligerait à baisser les autres, qui sont figées. Sur un oui ou non, chaque nom est indépendant.
+  const ajoutPossible = !clos && (actuel.type === "oui_non" || actuel.type === "vote");
+  (nouveau.options || []).forEach((o) => {
+    if (avant[o.id]) return;
+    if (!ajoutPossible) throw erreur(deja + "on ne peut plus ajouter de réponse à ce pari (« " + o.label + " »).");
+  });
+
+  if (!clos) return;
+  // Après la clôture, les pronos sont dévoilés : le pari ne peut pas être rouvert, ni sa liste changer.
+  if (dateMs(nouveau.cloture) > maintenant) throw erreur("Ce pari est clos et les pronos ont été dévoilés : il ne peut pas être rouvert.");
+  (actuel.options || []).forEach((o) => {
+    if (!apres[o.id]) throw erreur("Ce pari est clos : la réponse « " + o.label + " » ne peut plus être retirée.");
+  });
 }
 
 // ---------- Statistiques dévoilées à la clôture ----------
@@ -383,8 +472,13 @@ function statistiques(pari, pronos) {
 
 // ---------- Duels ----------
 
-function issueDuel(duel, pariEtat, pointsDe) {
+// aParie(id) : ce joueur a-t-il un prono sur le pari du duel ?
+// Un duel où l'un des deux n'a pas parié est annulé : sinon, défier tous les joueurs inactifs
+// donnerait des victoires sans risque. Tant que le pari n'est pas résolu, le duel reste « en cours »
+// pour tout le monde, afin de ne pas révéler qui a parié.
+function issueDuel(duel, pariEtat, pointsDe, aParie) {
   if (pariEtat !== "resolu") return { statut: "en_cours" };
+  if (!aParie(duel.lanceur) || !aParie(duel.adversaire)) return { statut: "annule" };
   const a = pointsDe(duel.lanceur);
   const b = pointsDe(duel.adversaire);
   if (a === b) return { statut: "nul", pointsLanceur: a, pointsAdversaire: b };
@@ -466,7 +560,9 @@ function classementComplet(joueurs, guildes, paris, pronos, duels) {
     const pari = parisParId[d.pari];
     if (!pari) return;
     const pts = pointsParPari[d.pari] || {};
-    const issue = issueDuel(d, pari.statut === "resolu" ? "resolu" : "autre", (id) => pts[id] || 0);
+    // pointsParPari ne contient que les joueurs qui ont un prono sur ce pari résolu.
+    const issue = issueDuel(d, pari.statut === "resolu" ? "resolu" : "autre", (id) => pts[id] || 0, (id) => pts[id] !== undefined);
+    if (issue.statut === "annule") return;
     [d.lanceur, d.adversaire].forEach((id) => {
       if (!bilanDuels[id]) return;
       if (issue.statut === "en_cours") bilanDuels[id].enCours++;
@@ -542,13 +638,14 @@ function calculerTrophees(joueurs, listeJoueurs, paris, parisParId, pronos, bila
     if (!p || !pr.reponse) return;
     const j = pr.joueur;
     const etat = etatPari(p, maintenant);
+    // Tant qu'un pari est ouvert, les trophées n'en tiennent pas compte : un compteur qui bouge
+    // (Kamikaze, Girouette) trahirait ce qu'un joueur vient de parier avant la clôture.
+    if (etat !== "clos" && etat !== "resolu") return;
     girouette[j] = (girouette[j] || 0) + pr.modifs;
 
-    if (etat === "clos" || etat === "resolu") {
-      const cloture = dateMs(p.cloture);
-      const maj = dateMs(pr.maj);
-      if (maj && cloture - maj <= 3600 * 1000 && cloture - maj >= 0) retardataire[j] = (retardataire[j] || 0) + 1;
-    }
+    const cloture = dateMs(p.cloture);
+    const maj = dateMs(pr.maj);
+    if (maj && cloture - maj <= 3600 * 1000 && cloture - maj >= 0) retardataire[j] = (retardataire[j] || 0) + 1;
 
     // Kamikaze : réponses sur des probabilités inférieures à 10 %.
     const options = p.options || [];
@@ -683,11 +780,11 @@ function duelDepuisRecord(d) {
 }
 
 module.exports = {
-  TYPES, PHASES, STATUTS_CANDIDAT,
+  TYPES, PHASES, STATUTS_CANDIDAT, PLAFOND_POINTS, MAX_OUI_NON,
   lireJSON, dateMs, versISO, erreur,
   pariDepuisRecord, pronoDepuisRecord, joueurDepuisRecord,
   etatPari, estDevoile, pointsProba, calculerPoints,
-  normaliserReponse, normaliserResultat, normaliserPari,
+  normaliserReponse, normaliserResultat, normaliserPari, verifierModifPari,
   statistiques, issueDuel, classementComplet,
   trouver, tous, exigerAdmin, stable, recalculerPoints,
   guildeDepuisRecord, candidatDepuisRecord, duelDepuisRecord,
