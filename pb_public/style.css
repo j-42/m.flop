@@ -745,7 +745,7 @@ input[type="range"] { width: 100%; accent-color: var(--tampon); }
 }
 .rang:nth-child(-n+3) .rang-num { color: var(--or); }
 .rang-nom { min-width: 0; }
-.rang-nom strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rang-nom strong { display: block; overflow: hidden; text-overflow: ellipsis;}
 .rang-piste { display: block; height: .375rem; margin-top: .375rem; background: var(--survol); border-radius: 2px; overflow: hidden; }
 .rang-piste span { display: block; height: 100%; background: var(--c, var(--encre-2)); }
 .rang-points { text-align: right; }
