@@ -3,7 +3,7 @@
 
 const TYPES = ["choix", "oui_non", "classement", "estimation", "vote", "scores"];
 const PHASES = ["campagne", "parrainages", "premier_tour", "second_tour"];
-const STATUTS_CANDIDAT = ["declare", "officiel", "non_retenu", "retire"];
+const STATUTS_CANDIDAT = ["declare", "pressenti", "officiel", "non_retenu", "retire"];
 
 // Points gagnés par le vainqueur d'un duel. Le perdant ne perd rien. Un joueur lance un seul duel par pari.
 const BONUS_DUEL = 20;
@@ -1397,6 +1397,144 @@ function importerSondages(app) {
   return { trouves: trouves, horsTableau: horsTableau, sansSondage: sansSondage, bordsAjoutes: bordsAjoutes, sondage: s.sondage };
 }
 
+// ---------- Import des candidats et cotes des 500 signatures ----------
+
+// Même source que les sondages : 2027 et moi (Licence ouverte). Chaque statut y est sourcé.
+// statut : declare, pressenti ou renonce. precedentes : candidatures aux présidentielles passées.
+const SOURCE_CANDIDATURES = "https://raw.githubusercontent.com/2027etmoi/2027etmoi/main/data/candidatures.json";
+const STATUT_SOURCE = { declare: "declare", pressenti: "pressenti", renonce: "retire" };
+
+function telechargerJSON(url) {
+  return lireReponseHttp($http.send({ url: url, method: "GET", timeout: 30 }));
+}
+
+// Ajoute les candidats déclarés et pressentis absents du tableau, passe en « Retiré » ceux qui ont renoncé.
+// Ne touche jamais à un candidat « Officiel » ou « Non retenu » : c'est la liste du Conseil constitutionnel qui décide.
+function importerCandidats(app) {
+  let source;
+  try {
+    source = telechargerJSON(SOURCE_NOMS);
+  } catch (err) {
+    throw erreur("Import impossible : le serveur du jeu n'arrive pas à joindre la source des candidats. " + (err && err.message ? err.message : ""));
+  }
+  const coll = app.findCollectionByNameOrId("candidats");
+  const recs = app.findRecordsByFilter("candidats", "id != ''", "nom", 0, 0);
+  const candidats = recs.map((r) => ({ id: r.id, nom: r.getString("nom"), rec: r }));
+  const rapport = { ajoutes: [], retires: [], statuts: [], absents: [], ignores: 0, mise_a_jour: source.mise_a_jour || "" };
+  const vus = {};
+  (source.candidats || []).forEach((s) => {
+    const statut = STATUT_SOURCE[s.statut];
+    if (!statut) return;
+    const c = rapprocher(s.id, s.nom, candidats);
+    if (!c) {
+      if (statut === "retire") { rapport.ignores++; return; }
+      const r = new Record(coll);
+      r.set("nom", String(s.nom || "").slice(0, 80));
+      r.set("parti", String(s.parti || "").slice(0, 120));
+      r.set("statut", statut);
+      let bord = BORD_SOURCE[s.bloc] || "";
+      if (PARTIS_EXTREME_GAUCHE.test(s.parti || "")) bord = "extreme_gauche";
+      r.set("donnees", { bord: bord });
+      app.save(r);
+      rapport.ajoutes.push(s.nom + (statut === "pressenti" ? " (pressenti)" : ""));
+      return;
+    }
+    vus[c.id] = true;
+    const rec = c.rec;
+    const actuel = rec.getString("statut");
+    let change = false;
+    if (actuel !== "officiel" && actuel !== "non_retenu" && actuel !== statut) {
+      rec.set("statut", statut);
+      change = true;
+      if (statut === "retire") rapport.retires.push(c.nom);
+      else rapport.statuts.push(c.nom + " : " + ({ declare: "déclaré", pressenti: "pressenti" }[statut]));
+    }
+    if (!rec.getString("parti") && s.parti) { rec.set("parti", String(s.parti).slice(0, 120)); change = true; }
+    const d = lireJSON(rec, "donnees", {}) || {};
+    if (BORDS.indexOf(d.bord) < 0) {
+      const bord = PARTIS_EXTREME_GAUCHE.test(rec.getString("parti")) ? "extreme_gauche" : BORD_SOURCE[s.bloc] || "";
+      if (bord) { d.bord = bord; rec.set("donnees", d); change = true; }
+    }
+    if (change) app.save(rec);
+  });
+  recs.forEach((r) => {
+    if (!vus[r.id] && (r.getString("statut") === "declare" || r.getString("statut") === "pressenti")) rapport.absents.push(r.getString("nom"));
+  });
+  return rapport;
+}
+
+// Cote des 500 signatures, par une règle simple tirée des présidentielles passées :
+// les candidats à 2 % ou plus dans les sondages ont tous eu leurs signatures en 2017 et 2022 ;
+// les petits candidats les ont s'ils ont un réseau d'élus, ce que montre surtout leur dernière candidature.
+const PALIERS_PARRAINAGES = [[5, 95], [2, 80], [1, 60], [0, 40]];
+const COTE_SANS_SONDAGE = 10;
+
+// Dernière candidature passée : qualifié, ou non qualifié avec son nombre de parrainages.
+function derniereCandidature(precedentes) {
+  const l = (precedentes || []).slice().sort((a, b) => (b.annee || 0) - (a.annee || 0));
+  if (!l.length) return null;
+  const texte = String(l[0].resultat || "");
+  if (/au 1er tour/i.test(texte)) return { annee: l[0].annee, qualifie: true };
+  if (/non qualifi/i.test(texte)) {
+    const m = texte.match(/\((\d[\d\s]*) parrainage/);
+    const n = m ? Number(m[1].replace(/\s/g, "")) : /aucun/i.test(texte) ? 0 : null;
+    return { annee: l[0].annee, qualifie: false, parrainages: n };
+  }
+  return null;
+}
+
+function coteParrainages(intention, derniere) {
+  let cote = COTE_SANS_SONDAGE;
+  let raison = "absent des sondages";
+  if (intention !== null && intention !== undefined) {
+    for (let i = 0; i < PALIERS_PARRAINAGES.length; i++) {
+      if (intention >= PALIERS_PARRAINAGES[i][0]) {
+        cote = PALIERS_PARRAINAGES[i][1];
+        raison = String(intention).replace(".", ",") + " % dans les sondages";
+        break;
+      }
+    }
+  }
+  if (derniere && derniere.qualifie && cote < 85) {
+    cote = 85;
+    raison += ", qualifié en " + derniere.annee;
+  } else if (derniere && !derniere.qualifie) {
+    const n = derniere.parrainages;
+    const plafond = n !== null && n !== undefined && n >= 200 ? 50 : 20;
+    if (cote > plafond) cote = plafond;
+    raison += ", non qualifié en " + derniere.annee + (n !== null && n !== undefined ? " (" + n + " parrainage" + (n > 1 ? "s" : "") + ")" : "");
+  }
+  return { cote: cote, raison: raison };
+}
+
+// Remplit la cote des 500 signatures des candidats déclarés et pressentis. Les autres ne sont pas touchés.
+function calculerCotesParrainages(app) {
+  let historique = {};
+  let noms = {};
+  let sansHistorique = false;
+  try {
+    historique = (telechargerJSON(SOURCE_CANDIDATURES).candidatures) || {};
+    (telechargerJSON(SOURCE_NOMS).candidats || []).forEach((x) => { noms[x.id] = x.nom; });
+  } catch (err) {
+    sansHistorique = true;
+  }
+  const recs = app.findRecordsByFilter("candidats", "statut = 'declare' || statut = 'pressenti'", "nom", 0, 0);
+  const lignes = [];
+  recs.forEach((r) => {
+    const c = [{ id: r.id, nom: r.getString("nom") }];
+    const idSource = Object.keys(historique).find((id) => rapprocher(id, noms[id] || "", c));
+    const derniere = idSource ? derniereCandidature(historique[idSource].precedentes) : null;
+    const d = lireJSON(r, "donnees", {}) || {};
+    const res = coteParrainages(nombreOuNull(d.intention_t1), derniere);
+    d.cote_parrainages = res.cote;
+    r.set("donnees", d);
+    app.save(r);
+    lignes.push({ nom: r.getString("nom"), cote: res.cote, raison: res.raison });
+  });
+  lignes.sort((a, b) => b.cote - a.cote || a.nom.localeCompare(b.nom));
+  return { lignes: lignes, sansHistorique: sansHistorique };
+}
+
 // ---------- Accès aux données ----------
 
 function trouver(collection, filtre, params) {
@@ -1459,5 +1597,6 @@ module.exports = {
   trouver, tous, exigerAdmin, stable, recalculerPoints,
   guildeDepuisRecord, candidatDepuisRecord, duelDepuisRecord,
   NOMS_TYPES, LIENS, nombreOuNull, ajusterSomme, cotesPremierTour, cotesSecondTour, moyennesSondages, rapprocher, slug,
+  importerCandidats, calculerCotesParrainages, derniereCandidature, coteParrainages,
   renommerDansParis, etatTableau, lireScrutin, ecrireScrutin, donneesCandidat, contexteTableau, optionsReliees, synchroniserParis, cotesAffichees, importerSondages,
 };

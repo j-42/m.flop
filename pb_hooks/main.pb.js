@@ -535,6 +535,22 @@ cronAdd("flop-paris-relies", "*/10 * * * *", () => {
   try { lib.synchroniserParis($app, true); } catch (err) { $app.logger().error("Synchronisation des paris reliés", "erreur", String(err)); }
 });
 
+routerAdd("POST", "/api/jeu/admin/import-candidats", (e) => {
+  const lib = require(`${__hooks}/jeu_lib.js`);
+  lib.exigerAdmin(e);
+  const rapport = lib.importerCandidats($app);
+  const bilan = lib.synchroniserParis($app);
+  return e.json(200, Object.assign({ ok: true, rapportCandidats: rapport, bilan: bilan }, lib.etatTableau($app)));
+}, $apis.requireAuth("users"));
+
+routerAdd("POST", "/api/jeu/admin/cotes-parrainages", (e) => {
+  const lib = require(`${__hooks}/jeu_lib.js`);
+  lib.exigerAdmin(e);
+  const rapport = lib.calculerCotesParrainages($app);
+  const bilan = lib.synchroniserParis($app);
+  return e.json(200, Object.assign({ ok: true, rapportCotes: rapport, bilan: bilan }, lib.etatTableau($app)));
+}, $apis.requireAuth("users"));
+
 routerAdd("POST", "/api/jeu/admin/guilde", (e) => {
   const lib = require(`${__hooks}/jeu_lib.js`);
   lib.exigerAdmin(e);

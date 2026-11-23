@@ -76,3 +76,11 @@ Paris ajoutés en brouillon par la migration : Scores du 1er tour, Vote blanc au
 | 7 | Les cotes calculées sont gardées en cache dans `reglages` tant que les intentions de vote ne changent pas : le tableau s'ouvre sans refaire la simulation | `cotesT1` |
 | 8 | Les paragraphes ne sont plus limités à 65 caractères de large | `pb_public/style.css` |
 
+## Import des candidats et cotes des 500 signatures
+
+| # | Changement | Fichiers |
+|---|---|---|
+| 1 | Nouveau statut de candidat « Pressenti » : cité dans les sondages, pas déclaré. Il n'entre dans aucun pari tant qu'il n'est pas déclaré | `pb_migrations/1700000200_statut_pressenti.js`, `STATUTS_CANDIDAT` |
+| 2 | Bouton « Importer les candidats » : ajoute les déclarés et pressentis absents du tableau, avec parti et bord, et passe en « Retiré » ceux qui ont renoncé, d'après les données ouvertes de 2027 et moi. Ne touche pas aux candidats officiels, non retenus ou absents de la source | `importerCandidats`, route `/api/jeu/admin/import-candidats` |
+| 3 | Bouton « Calculer les cotes des 500 signatures » : règle par paliers d'intention de vote, corrigée par le résultat de la dernière présidentielle du candidat (qualifié, ou nombre de parrainages obtenus) | `calculerCotesParrainages`, `coteParrainages`, route `/api/jeu/admin/cotes-parrainages` |
+

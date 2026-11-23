@@ -20,12 +20,12 @@
     saisie: {}, filtres: {},
     edition: null, resolution: {},
     ecart: 0, derniereRoute: "",
-    jetonRoute: 0, tableau: null, tableauFrais: false, rapportImport: null, filtreTableau: "", calendrier: null,
+    jetonRoute: 0, tableau: null, tableauFrais: false, rapportCandidats: null, rapportCotes: null, rapportImport: null, filtreTableau: "", calendrier: null,
   };
 
   const PHASES = { campagne: "Campagne", parrainages: "Parrainages", premier_tour: "1er tour", second_tour: "2nd tour" };
   const TYPES = { choix: "Un seul choix", oui_non: "Oui ou non", classement: "Classement", estimation: "Estimation", scores: "Scores", vote: "Mon vote" };
-  const STATUTS_CANDIDAT = { declare: "Déclaré", officiel: "Sur la liste officielle", non_retenu: "Non retenu", retire: "Retiré" };
+  const STATUTS_CANDIDAT = { declare: "Déclaré", pressenti: "Pressenti", officiel: "Sur la liste officielle", non_retenu: "Non retenu", retire: "Retiré" };
   // Liens possibles entre un pari et le tableau des candidats. Doit rester égal à LIENS dans pb_hooks/jeu_lib.js.
   const LIENS = {
     parrainages: ["Les 500 signatures", "oui_non"],
@@ -189,10 +189,10 @@
       } catch (err) { /* stockage indisponible */ }
       return defaut;
     };
-    // Ancien réglage : musique allumée ou non.
-    let ancienneMusique = false;
-    try { ancienneMusique = localStorage.getItem("flop-musique") === "1"; } catch (err) { /* rien */ }
-    const v = { musique: lire("flop-volume-musique", ancienneMusique ? 30 : 0), bruitages: lire("flop-volume-bruitages", 70) };
+    // Musique à 25 par défaut : présente mais discrète. Un joueur qui l'avait coupée avec l'ancien bouton la garde coupée.
+    let musiqueCoupee = false;
+    try { musiqueCoupee = localStorage.getItem("flop-musique") === "0"; } catch (err) { /* rien */ }
+    const v = { musique: lire("flop-volume-musique", musiqueCoupee ? 0 : 25), bruitages: lire("flop-volume-bruitages", 70) };
     return {
       get musique() { return v.musique; },
       get bruitages() { return v.bruitages; },
@@ -309,7 +309,7 @@
     Son.piece();
   }
 
-  // Musique de fond : coupée par défaut (volume à 0).
+  // Musique de fond, au volume réglé par le joueur (25 par défaut, discret).
   const Musique = (function () {
     let audio = null;
     function appliquer() {
@@ -1104,6 +1104,10 @@
         html += '<div class="ligne"><select id="duel-adversaire" style="flex:1 1 12rem;width:auto" aria-label="Joueur à défier">' +
           dispo.map((j) => '<option value="' + esc(j.id) + '">' + esc(j.pseudo) + "</option>").join("") + "</select>" +
           '<button type="button" class="bouton bouton-clair" data-action="duel" data-pari="' + esc(p.id) + '">Lancer le duel</button></div>';
+      } else {
+        html += '<p class="discret">' + (e.joueurs.length <= 1
+          ? "Personne à défier pour l’instant : tu es le seul joueur inscrit."
+          : "Personne d’autre à défier sur ce pari : tu as déjà un duel en cours avec chacun des autres joueurs.") + "</p>";
       }
     } else if (!mes.length) {
       html += '<p class="discret">Aucun duel sur ce pari.</p>';
@@ -1681,7 +1685,7 @@
   function ligneCandidat(c, nouveau) {
     const val = (v) => (v === null || v === undefined ? "" : v);
     const num = (k, min, max, titre) => '<td class="pct"><input type="number" inputmode="decimal" step="0.1" min="' + min + '" max="' + max + '" value="' + esc(val(c[k])) + '" data-tab="' + k + '" data-input="tab-num" aria-label="' + esc(titre + (c.nom ? " de " + c.nom : "")) + '"></td>';
-    const courts = { declare: "Déclaré", officiel: "Officiel", non_retenu: "Non retenu", retire: "Retiré" };
+    const courts = { declare: "Déclaré", pressenti: "Pressenti", officiel: "Officiel", non_retenu: "Non retenu", retire: "Retiré" };
     const statut = '<select data-tab="statut" aria-label="Statut' + esc(c.nom ? " de " + c.nom : "") + '">' + Object.keys(courts).map((k) => '<option value="' + k + '"' + (k === c.statut ? " selected" : "") + ">" + courts[k] + "</option>").join("") + "</select>";
     const bord = '<select data-tab="bord" aria-label="Bord politique' + esc(c.nom ? " de " + c.nom : "") + '"><option value="">Non renseigné</option>' + Object.keys(BORDS).map((k) => '<option value="' + k + '"' + (k === c.bord ? " selected" : "") + ">" + BORDS[k] + "</option>").join("") + "</select>";
     return '<tr data-ligne-cand="' + esc(c.id || "") + '" data-nom-cand="' + esc(c.nom || "") + '" class="statut-' + esc(c.statut) + (nouveau ? " nouveau" : "") + '">' +
@@ -1700,7 +1704,7 @@
     const sc = t.scrutin || {};
     const cotes = t.cotes || {};
     const parIdC = parId(t.candidats);
-    const ordreStatut = { officiel: 0, declare: 1, non_retenu: 2, retire: 3 };
+    const ordreStatut = { officiel: 0, declare: 1, pressenti: 2, non_retenu: 3, retire: 4 };
     const liste = t.candidats.slice().sort((a, b) =>
       (ordreStatut[a.statut] - ordreStatut[b.statut]) ||
       ((b.intention_t1 === null ? -1 : b.intention_t1) - (a.intention_t1 === null ? -1 : a.intention_t1)) ||
@@ -1765,16 +1769,47 @@
         "</tbody></table></div>"
       : '<p class="discret">Aucun pari relié. Dans un pari, choisis « Relié au tableau des candidats ».</p>');
 
-    // Intentions de vote : import, en bas car il ne sert qu'à l'occasion.
+    // Imports : en bas, car ils ne servent qu'à l'occasion.
     const so = sc.sondage;
-    html += '<div class="carte carte-import" style="margin-top:1.5rem"><h3 style="margin-top:0">Intentions de vote</h3>' +
-      '<p class="petit">Le bouton importe la moyenne des sondages du 1er tour publiés ces dernières semaines : pour chaque candidat, la moyenne des hypothèses de chaque sondage, puis la moyenne des sondages. Il renseigne aussi le bord politique des candidats qui n’en ont pas. Tu peux ensuite ajuster chaque valeur dans le tableau.</p>' +
-      (so ? '<p class="petit discret">Dernier import le ' + esc(jour(dms(so.importe_le))) + " : " + pluriel(so.nb || 0, "sondage") + (so.du ? " réalisés du " + esc(jour(dms(so.du))) + " au " + esc(jour(dms(so.au))) : "") + '. Source : <a href="' + esc(so.url) + '" target="_blank" rel="noopener">' + esc(so.source) + "</a>, données mises à jour le " + esc(jour(dms(so.mise_a_jour))) + ".</p>" : "") +
+    html += '<div class="carte carte-import" style="margin-top:1.5rem"><h3 style="margin-top:0">Imports</h3>' +
+      '<p class="petit discret">Source : <a href="https://github.com/2027etmoi/2027etmoi" target="_blank" rel="noopener">2027 et moi</a>, données ouvertes (Licence ouverte) qui reprennent les notices de la Commission des sondages et des déclarations de candidature sourcées. Il n’existe pas de liste officielle avant celle du Conseil constitutionnel, attendue mi-mars 2027. Pense à enregistrer le tableau avant un import : un import recharge le tableau.</p>' +
+
+      '<h4>1. Candidats</h4><p class="petit">Ajoute les candidats déclarés et pressentis absents du tableau, avec leur parti et leur bord. Passe en « Retiré » ceux qui ont renoncé. Ne touche pas aux candidats « Officiel » ou « Non retenu », ni aux candidats absents de la source.</p>' +
+      (S.rapportCandidats ? rapportCandidats(S.rapportCandidats) : "") +
+      '<button type="button" class="bouton bouton-clair" data-action="importer-candidats">Importer les candidats</button>' +
+
+      '<h4>2. Intentions de vote</h4><p class="petit">Moyenne des sondages du 1er tour des dernières semaines : pour chaque candidat, la moyenne des hypothèses de chaque sondage, puis la moyenne des sondages. Renseigne aussi le bord des candidats qui n’en ont pas.</p>' +
+      (so ? '<p class="petit discret">Dernier import le ' + esc(jour(dms(so.importe_le))) + " : " + pluriel(so.nb || 0, "sondage") + (so.du ? " réalisés du " + esc(jour(dms(so.du))) + " au " + esc(jour(dms(so.au))) : "") + ", données mises à jour le " + esc(jour(dms(so.mise_a_jour))) + ".</p>" : "") +
       (S.rapportImport ? rapportImport(S.rapportImport) : "") +
       '<button type="button" class="bouton bouton-clair" data-action="importer-sondages">Importer les intentions de vote</button>' +
-      '<p class="petit discret" style="margin-bottom:0">Les sondages du 2nd tour testent des duels hypothétiques : les intentions du 2nd tour se saisissent à la main, une fois les finalistes connus.</p></div>';
+      '<p class="petit discret">Les sondages du 2nd tour testent des duels hypothétiques : les intentions du 2nd tour se saisissent à la main, une fois les finalistes connus.</p>' +
+
+      '<h4>3. Cotes des 500 signatures</h4><p class="petit">Il n’existe pas de pronostic publié des parrainages : la cote est estimée par une règle tirée des présidentielles 2017 et 2022, appliquée aux candidats déclarés et pressentis. À faire après l’import des intentions de vote, puis à ajuster à la main.</p>' +
+      '<ul class="petit"><li>Intention de vote de 5 % ou plus : 95 %. De 2 à 5 % : 80 %. De 1 à 2 % : 60 %. Moins de 1 % : 40 %. Absent des sondages : 10 %.</li>' +
+      "<li>Qualifié à sa dernière présidentielle : au moins 85 %.</li>" +
+      "<li>Non qualifié à sa dernière présidentielle : au plus 50 % s’il avait réuni 200 parrainages ou plus, au plus 20 % sinon.</li></ul>" +
+      (S.rapportCotes ? rapportCotes(S.rapportCotes) : "") +
+      '<button type="button" class="bouton bouton-clair" data-action="cotes-parrainages">Calculer les cotes des 500 signatures</button>' +
+      '<p class="petit discret" style="margin-bottom:0">Les cotes du pari des 500 signatures sont figées dès le premier pari d’un joueur : à régler avant de le publier. Pendant la collecte, le Conseil constitutionnel publie les parrainages validés deux fois par semaine ; ils servent à suivre la course, pas à changer les cotes.</p></div>';
+    S.rapportCandidats = null;
+    S.rapportCotes = null;
     S.rapportImport = null;
     return html;
+  }
+
+  function rapportCandidats(r) {
+    const lignes = [];
+    lignes.push(r.ajoutes.length ? pluriel(r.ajoutes.length, "candidat ajouté", "candidats ajoutés") + " : " + r.ajoutes.join(", ") + "." : "Aucun candidat à ajouter.");
+    if (r.retires.length) lignes.push("Passés en « Retiré » : " + r.retires.join(", ") + ".");
+    if (r.statuts.length) lignes.push("Statut mis à jour : " + r.statuts.join(", ") + ".");
+    if (r.absents.length) lignes.push("Déclarés ou pressentis dans le tableau mais absents de la source, non modifiés : " + r.absents.join(", ") + ".");
+    if (r.mise_a_jour) lignes.push("Source mise à jour le " + jour(dms(r.mise_a_jour)) + ".");
+    return '<div class="message message-info petit">' + lignes.map(esc).join("<br>") + "</div>";
+  }
+
+  function rapportCotes(r) {
+    return '<div class="message message-info petit">' + (r.sansHistorique ? "Historique des candidatures indisponible : cotes calculées sur les seuls sondages.<br>" : "") +
+      r.lignes.map((l) => "<strong>" + esc(l.nom) + "</strong> : " + l.cote + " % <span class=\"discret\">(" + esc(l.raison) + ")</span>").join("<br>") + "</div>";
   }
 
   function rapportImport(r) {
@@ -2176,6 +2211,40 @@
       const oui = tr.classList.toggle("a-supprimer");
       el.textContent = oui ? "Annuler" : "Supprimer";
       if (oui) notifier("« " + tr.dataset.nomCand + " » sera supprimé à l’enregistrement du tableau.");
+    },
+    "importer-candidats": async (el) => {
+      el.disabled = true;
+      try {
+        const res = await api("/api/jeu/admin/import-candidats", { method: "POST" });
+        S.tableau = res;
+        S.tableauFrais = true;
+        S.rapportCandidats = res.rapportCandidats;
+        invalider();
+        await chargerEtat(true);
+        notifier(pluriel(res.rapportCandidats.ajoutes.length, "candidat ajouté", "candidats ajoutés") + ". " + texteBilan(res.bilan));
+        vueAdmin("candidats");
+      } catch (err) {
+        el.disabled = false;
+        throw err;
+      }
+    },
+    "cotes-parrainages": async (el) => {
+      if (S.tableau && S.tableau.candidats.some((c) => (c.statut === "declare" || c.statut === "pressenti") && c.cote_parrainages !== null) &&
+        !confirm("Remplacer les cotes des 500 signatures de tous les candidats déclarés et pressentis ? Tes ajustements seront écrasés.")) return;
+      el.disabled = true;
+      try {
+        const res = await api("/api/jeu/admin/cotes-parrainages", { method: "POST" });
+        S.tableau = res;
+        S.tableauFrais = true;
+        S.rapportCotes = res.rapportCotes;
+        invalider();
+        await chargerEtat(true);
+        notifier(pluriel(res.rapportCotes.lignes.length, "cote calculée", "cotes calculées") + ". " + texteBilan(res.bilan));
+        vueAdmin("candidats");
+      } catch (err) {
+        el.disabled = false;
+        throw err;
+      }
     },
     "importer-sondages": async (el) => {
       if (S.tableau && S.tableau.candidats.some((c) => c.intention_t1 !== null) &&

@@ -134,11 +134,30 @@ Dates retenues dans le catalogue, à confirmer par le décret de convocation des
 
 ### Le tableau des candidats
 
-Une ligne par candidat : statut, bord politique, cote des 500 signatures, intentions de vote au 1er et au 2nd tour, scores réels des deux tours. Sous le tableau : vote blanc (en % des votants) et abstention (en % des inscrits) des deux tours.
+Une ligne par candidat : statut (déclaré, pressenti, officiel, non retenu, retiré), bord politique, cote des 500 signatures, intentions de vote au 1er et au 2nd tour, scores réels des deux tours. Sous le tableau : vote blanc (en % des votants) et abstention (en % des inscrits) des deux tours.
 
-**Import des intentions de vote.** Le serveur du jeu lit le fichier `data/sondages.json` du dépôt public [2027etmoi/2027etmoi](https://github.com/2027etmoi/2027etmoi) (Licence ouverte), qui reprend les sondages du 1er tour déposés à la Commission des sondages sur environ sept semaines. Pour chaque candidat : moyenne des hypothèses de chaque sondage, puis moyenne des sondages. Les candidats sont rapprochés par leur nom ; le compte rendu liste ceux qui n’ont pas pu l’être. L’import renseigne aussi le bord politique des candidats qui n’en ont pas : celui de la source, les souverainistes en « autre », et l’extrême gauche repérée par le parti (Lutte ouvrière, NPA, Révolution permanente).
+Il n’existe pas de liste officielle des candidats avant celle du Conseil constitutionnel, attendue mi-mars 2027. Les trois imports du bas de l’onglet utilisent les données ouvertes du dépôt public [2027etmoi/2027etmoi](https://github.com/2027etmoi/2027etmoi) (Licence ouverte), où chaque statut et chaque sondage est sourcé. Le conteneur doit pouvoir joindre `raw.githubusercontent.com` en HTTPS. Enregistrer le tableau avant un import : un import recharge le tableau.
 
-**Ajouter ou supprimer un candidat.** Dans le tableau, **Ajouter un candidat** crée une ligne, **Supprimer** marque une ligne : les deux sont appliqués à l’enregistrement. Un candidat qui figure dans un pari où des joueurs ont parié ne peut pas être supprimé : le passer en « Retiré ». Le conteneur doit pouvoir joindre `raw.githubusercontent.com` en HTTPS. Les intentions du 2nd tour se saisissent à la main.
+**Import des candidats.** Le serveur lit `data/candidats.json`. Il ajoute les candidats déclarés et pressentis absents du tableau, avec leur parti et leur bord, et passe en « Retiré » ceux qui ont renoncé. Il ne touche ni aux candidats « Officiel » ou « Non retenu », ni aux candidats absents de la source ; le compte rendu liste ces derniers. Un candidat « Pressenti » (cité dans les sondages, pas déclaré) n’entre dans aucun pari tant qu’il n’est pas passé en « Déclaré ».
+
+**Import des intentions de vote.** Le serveur du jeu lit le fichier `data/sondages.json`, qui reprend les sondages du 1er tour déposés à la Commission des sondages sur environ sept semaines. Pour chaque candidat : moyenne des hypothèses de chaque sondage, puis moyenne des sondages. Les candidats sont rapprochés par leur nom ; le compte rendu liste ceux qui n’ont pas pu l’être. L’import renseigne aussi le bord politique des candidats qui n’en ont pas : celui de la source, les souverainistes en « autre », et l’extrême gauche repérée par le parti (Lutte ouvrière, NPA, Révolution permanente). Les intentions du 2nd tour se saisissent à la main.
+
+**Cotes des 500 signatures.** Aucune source ne publie de pronostic des parrainages. Le bouton **Calculer les cotes des 500 signatures** applique aux candidats déclarés et pressentis une règle tirée des présidentielles 2017 et 2022, puis chaque cote s’ajuste à la main :
+
+| Critère | Cote |
+|---|---|
+| Intention de vote de 5 % ou plus | 95 % |
+| De 2 à 5 % | 80 % |
+| De 1 à 2 % | 60 % |
+| Moins de 1 % | 40 % |
+| Absent des sondages | 10 % |
+| Qualifié à sa dernière présidentielle | au moins 85 % |
+| Non qualifié à sa dernière présidentielle, avec 200 parrainages ou plus | au plus 50 % |
+| Non qualifié à sa dernière présidentielle, avec moins de 200 parrainages | au plus 20 % |
+
+L’historique des candidatures vient de `data/candidatures.json`. La règle ne voit pas le réseau d’élus d’un parti pour un nouveau candidat (par exemple un candidat de parti installé absent des sondages) : à ajuster à la main. Les cotes du pari des 500 signatures sont figées dès le premier pari d’un joueur. Pendant la collecte des parrainages, le Conseil constitutionnel publie les parrainages validés deux fois par semaine ; le résultat du pari vient ensuite de la liste officielle, en passant les candidats retenus en « Officiel ».
+
+**Ajouter ou supprimer un candidat.** Dans le tableau, **Ajouter un candidat** crée une ligne, **Supprimer** marque une ligne : les deux sont appliqués à l’enregistrement. Un candidat qui figure dans un pari où des joueurs ont parié ne peut pas être supprimé : le passer en « Retiré ».
 
 **Cotes calculées.** Pour les paris du 1er tour (en tête, podium, flop 3, pire score), le jeu simule 10 000 fois le scrutin à partir des intentions de vote, avec un écart type de 0,5 + 0,12 × l’intention (environ 4 points pour un candidat à 30 %). Un candidat sans intention compte pour 0,5 %. Les cotes sont bornées entre 1 et 99 %. Pour l’élu, la cote vient de la part du premier finaliste dans les intentions du 2nd tour, avec un écart type de 3,5 points. Les candidats du 1er tour sont ceux au statut « Sur la liste officielle », ou à défaut les déclarés.
 
