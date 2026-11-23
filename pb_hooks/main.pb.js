@@ -247,6 +247,15 @@ routerAdd("POST", "/api/jeu/admin/pari", (e) => {
   const lib = require(`${__hooks}/jeu_lib.js`);
   lib.exigerAdmin(e);
   const b = e.requestInfo().body || {};
+  // Pari relié au tableau des candidats : ses réponses et ses cotes viennent du tableau, pas du formulaire.
+  if (b.config && b.config.lien && lib.LIENS[b.config.lien] && lib.LIENS[b.config.lien].options) {
+    const existant = b.id ? lib.trouver("paris", "id = {:id}", { id: String(b.id) }) : null;
+    const avant = existant ? lib.pariDepuisRecord(existant) : null;
+    const nb = existant ? $app.countRecords("pronos", $dbx.exp("pari = {:p}", { p: existant.id })) : 0;
+    const base = { type: b.type, config: b.config, cloture: avant ? avant.cloture : lib.versISO(b.cloture), options: avant ? avant.options : [] };
+    const options = lib.optionsReliees(base, lib.contexteTableau($app), nb, Date.now());
+    if (options) b.options = options;
+  }
   const d = lib.normaliserPari(b);
   let rec;
   if (b.id) {
@@ -265,6 +274,8 @@ routerAdd("POST", "/api/jeu/admin/pari", (e) => {
     tx.save(rec);
     if (d.statut === "resolu") lib.recalculerPoints(tx, rec);
   });
+  // Un pari relié déjà clos est résolu tout de suite si le tableau contient son résultat.
+  if (d.config.lien) lib.synchroniserParis($app);
   return e.json(200, { ok: true, id: rec.id });
 }, $apis.requireAuth("users"));
 
@@ -339,22 +350,9 @@ routerAdd("POST", "/api/jeu/admin/candidat", (e) => {
   rec.set("statut", statut);
   $app.runInTransaction((tx) => {
     tx.save(rec);
-    // Le nouveau nom est reporté dans les paris où ce candidat figure.
-    tx.findRecordsByFilter("paris", "id != ''", "", 0, 0).forEach((pr) => {
-      const options = lib.lireJSON(pr, "options", []) || [];
-      let change = false;
-      options.forEach((o) => {
-        if (o.id === rec.id && o.label !== rec.getString("nom")) {
-          o.label = rec.getString("nom");
-          change = true;
-        }
-      });
-      if (change) {
-        pr.set("options", options);
-        tx.save(pr);
-      }
-    });
+    lib.renommerDansParis(tx, rec.id, rec.getString("nom"));
   });
+  lib.synchroniserParis($app);
   return e.json(200, { ok: true, id: rec.id });
 }, $apis.requireAuth("users"));
 
@@ -423,3 +421,81 @@ routerAdd("POST", "/api/jeu/admin/role", (e) => {
   $app.save(u);
   return e.json(200, { ok: true });
 }, $apis.requireAuth("users"));
+
+routerAdd("GET", "/api/jeu/admin/tableau", (e) => {
+  const lib = require(`${__hooks}/jeu_lib.js`);
+  lib.exigerAdmin(e);
+  return e.json(200, lib.etatTableau($app));
+}, $apis.requireAuth("users"));
+
+routerAdd("POST", "/api/jeu/admin/tableau", (e) => {
+  const lib = require(`${__hooks}/jeu_lib.js`);
+  lib.exigerAdmin(e);
+  const b = e.requestInfo().body || {};
+  const lire = (v, min, max, quoi, nom) => {
+    const n = lib.nombreOuNull(v);
+    if (v !== "" && v !== null && v !== undefined && n === null) throw new BadRequestError(quoi + " de « " + nom + " » : ce n'est pas un nombre.");
+    if (n !== null && (n < min || n > max)) throw new BadRequestError(quoi + " de « " + nom + " » : entre " + min + " et " + max + " %.");
+    return n;
+  };
+  const lignes = (b.candidats || []).map((c) => {
+    const nom = String(c.nom || "").trim();
+    if (!nom) throw new BadRequestError("Chaque candidat doit avoir un nom.");
+    return {
+      id: String(c.id || ""),
+      nom: nom.slice(0, 80),
+      parti: String(c.parti || "").trim().slice(0, 120),
+      statut: lib.STATUTS_CANDIDAT.indexOf(c.statut) >= 0 ? c.statut : "declare",
+      donnees: {
+        cote_parrainages: lire(c.cote_parrainages, 1, 99, "La cote des 500 signatures", nom),
+        intention_t1: lire(c.intention_t1, 0, 100, "L'intention de vote au 1er tour", nom),
+        intention_t2: lire(c.intention_t2, 0, 100, "L'intention de vote au 2nd tour", nom),
+        score_t1: lire(c.score_t1, 0, 100, "Le score au 1er tour", nom),
+        score_t2: lire(c.score_t2, 0, 100, "Le score au 2nd tour", nom),
+      },
+    };
+  });
+  const sb = b.scrutin || {};
+  const s = lib.lireScrutin($app);
+  s.liste_officielle = !!sb.liste_officielle;
+  s.resultats_t1 = !!sb.resultats_t1;
+  s.resultats_t2 = !!sb.resultats_t2;
+  ["t1", "t2"].forEach((t) => {
+    const src = sb[t] || {};
+    s[t] = {
+      abstention: lire(src.abstention, 0, 100, "L'abstention", t === "t1" ? "1er tour" : "2nd tour"),
+      blanc: lire(src.blanc, 0, 100, "Le vote blanc", t === "t1" ? "1er tour" : "2nd tour"),
+    };
+  });
+  $app.runInTransaction((tx) => {
+    lignes.forEach((l) => {
+      let rec;
+      try { rec = tx.findRecordById("candidats", l.id); } catch (err) { throw new BadRequestError("Le candidat « " + l.nom + " » n'existe plus : recharge la page."); }
+      const ancienNom = rec.getString("nom");
+      rec.set("nom", l.nom);
+      rec.set("parti", l.parti);
+      rec.set("statut", l.statut);
+      rec.set("donnees", l.donnees);
+      tx.save(rec);
+      if (ancienNom !== l.nom) lib.renommerDansParis(tx, rec.id, l.nom);
+    });
+    lib.ecrireScrutin(tx, s);
+  });
+  const bilan = lib.synchroniserParis($app);
+  return e.json(200, Object.assign({ ok: true, bilan: bilan }, lib.etatTableau($app)));
+}, $apis.requireAuth("users"));
+
+routerAdd("POST", "/api/jeu/admin/import-sondages", (e) => {
+  const lib = require(`${__hooks}/jeu_lib.js`);
+  lib.exigerAdmin(e);
+  const rapport = lib.importerSondages($app);
+  const bilan = lib.synchroniserParis($app);
+  return e.json(200, Object.assign({ ok: true, rapport: rapport, bilan: bilan }, lib.etatTableau($app)));
+}, $apis.requireAuth("users"));
+
+// Toutes les 10 minutes : les paris reliés au tableau qui viennent de fermer
+// sont résolus si leur résultat est déjà saisi.
+cronAdd("flop-paris-relies", "*/10 * * * *", () => {
+  const lib = require(`${__hooks}/jeu_lib.js`);
+  try { lib.synchroniserParis($app, true); } catch (err) { $app.logger().error("Synchronisation des paris reliés", "erreur", String(err)); }
+});

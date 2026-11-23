@@ -399,7 +399,7 @@ input[type="range"] { width: 100%; accent-color: var(--tampon); }
   margin-bottom: 1rem;
 }
 .message-erreur { border-color: var(--tampon); background: var(--tampon-fond); }
-.message-info { border-color: var(--or); background: var(--or-fond); }
+.message-info { border-color: var(--or); background: var(--or-fond); margin: 10px 0;}
 
 /* ---------- Accueil : tableau de bord ---------- */
 
@@ -1185,3 +1185,54 @@ input[type="search"], input[type="datetime-local"], select, textarea {
   .confetti { display: none; }
   .promo .carte, .item-pari a, .bulletin, .jauge span { transition: none; }
 }
+
+/* ---------- Administration : dates au format français ---------- */
+.champ-date { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto 5.5rem; gap: .5rem; align-items: center; }
+.champ-date.invalide input { border-color: var(--tampon); background: var(--tampon-fond); }
+.date-erreur { color: var(--tampon) !important; font-weight: 600; }
+.champ small.date-erreur[hidden] { display: none; }
+.bouton-calendrier {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2.75rem; height: 2.75rem; padding: 0;
+  border: 2px solid var(--encre); border-radius: var(--rayon-petit);
+  background: var(--carte); color: var(--encre); cursor: pointer;
+}
+.bouton-calendrier:hover, .bouton-calendrier[aria-expanded="true"] { background: var(--soleil); color: #1E2246; }
+.bouton-calendrier svg { width: 1.25rem; height: 1.25rem; fill: none; stroke: currentColor; stroke-width: 2; }
+.calendrier {
+  position: absolute; top: calc(100% + .375rem); left: 0; z-index: 30;
+  width: 19rem; max-width: calc(100vw - 2rem); padding: .75rem;
+  background: var(--carte); border: 3px solid var(--encre); border-radius: var(--rayon-petit); box-shadow: var(--ombre);
+}
+.calendrier[hidden] { display: none; }
+.cal-entete { display: flex; align-items: center; justify-content: space-between; margin-bottom: .5rem; }
+.cal-entete strong { text-transform: capitalize; }
+.cal-nav { width: 2.25rem; height: 2.25rem; border: 2px solid var(--encre); border-radius: 999px; background: var(--carte); color: var(--encre); font-size: 1.25rem; line-height: 1; cursor: pointer; }
+.cal-nav:hover { background: var(--soleil); color: #1E2246; }
+.cal-grille { display: grid; grid-template-columns: repeat(7, 1fr); gap: .125rem; text-align: center; }
+.cal-jsem { font-size: .75rem; color: var(--ardoise); padding: .25rem 0; }
+.cal-jour { height: 2.25rem; border: 0; border-radius: 8px; background: transparent; color: var(--encre); cursor: pointer; font-variant-numeric: tabular-nums; }
+.cal-jour:hover { background: var(--survol); }
+.cal-jour.aujourdhui { box-shadow: inset 0 0 0 2px var(--filet-fort); }
+.cal-jour.choisi { background: var(--tampon); color: #FFFFFF; font-weight: 700; }
+.cal-pied { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .25rem .75rem; margin-top: .5rem; font-size: .875rem; }
+.cal-pied .bouton-lien { font-size: .875rem; }
+
+/* ---------- Administration : tableau des candidats ---------- */
+main.large { max-width: 82rem; }
+.admin-table td.num, .admin-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.admin-table tfoot th { border-bottom: 0; color: var(--encre); }
+tr.cache { display: none; }
+.tableau-candidats td { padding: .375rem .25rem; }
+.tableau-candidats td:first-child input { min-width: 11rem; }
+.tableau-candidats td:nth-child(2) input { min-width: 9rem; }
+.tableau-candidats td:nth-child(3) select { min-width: 9rem; }
+.tableau-candidats td.pct { width: 6rem; }
+.tableau-candidats td.pct input { text-align: right; }
+.tableau-candidats tr.statut-retire td, .tableau-candidats tr.statut-non_retenu td { opacity: .65; }
+.tableau-candidats tr.statut-officiel td:first-child input { border-color: var(--vert); }
+.etape-scrutin { display: flex; gap: .75rem; align-items: flex-start; padding: .5rem 0; cursor: pointer; }
+.etape-scrutin input { width: 1.25rem; height: 1.25rem; margin-top: .2rem; accent-color: var(--tampon); flex: none; }
+.etape-scrutin small { display: block; color: var(--ardoise); font-size: .875rem; }
+.scores-saisie td.pct { width: 9rem; }
+.scores-saisie input { text-align: right; }

@@ -20,17 +20,39 @@
     saisie: {}, filtres: {},
     edition: null, resolution: {},
     ecart: 0, derniereRoute: "",
+    tableau: null, tableauFrais: false, rapportImport: null, filtreTableau: "", calendrier: null,
   };
 
   const PHASES = { campagne: "Campagne", parrainages: "Parrainages", premier_tour: "1er tour", second_tour: "2nd tour" };
-  const TYPES = { choix: "Un seul choix", oui_non: "Oui ou non", classement: "Classement", estimation: "Estimation", vote: "Mon vote" };
+  const TYPES = { choix: "Un seul choix", oui_non: "Oui ou non", classement: "Classement", estimation: "Estimation", scores: "Scores", vote: "Mon vote" };
   const STATUTS_CANDIDAT = { declare: "Déclaré", officiel: "Sur la liste officielle", non_retenu: "Non retenu", retire: "Retiré" };
+  // Liens possibles entre un pari et le tableau des candidats. Doit rester égal à LIENS dans pb_hooks/jeu_lib.js.
+  const LIENS = {
+    parrainages: ["Les 500 signatures", "oui_non"],
+    nb_officiels: ["Le nombre de candidats officiels", "estimation"],
+    en_tete_t1: ["Le premier du 1er tour", "choix"],
+    podium_t1: ["Le podium du 1er tour", "classement"],
+    flop_t1: ["Le flop 3 du 1er tour", "classement"],
+    boulet_t1: ["Le pire score du 1er tour", "choix"],
+    scores_t1: ["Les scores du 1er tour", "scores"],
+    abstention_t1: ["L’abstention au 1er tour", "estimation"],
+    participation_t1: ["La participation au 1er tour", "estimation"],
+    blanc_t1: ["Le vote blanc au 1er tour", "estimation"],
+    vote_t1: ["Mon vote au 1er tour", "vote"],
+    elu: ["L’élu au 2nd tour", "choix"],
+    score_vainqueur_t2: ["Le score de l’élu", "estimation"],
+    scores_t2: ["Les scores du 2nd tour", "scores"],
+    abstention_t2: ["L’abstention au 2nd tour", "estimation"],
+    blanc_t2: ["Le vote blanc au 2nd tour", "estimation"],
+    vote_t2: ["Mon vote au 2nd tour", "vote"],
+  };
   const COULEURS_COURBES = ["#3A6FB0", "#2E8B8B", "#C9930F", "#7A4FA3", "#5E8C3A"];
 
   const ICONES = {
     retour: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01" stroke-linecap="round"/></svg>',
     suite: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    calendrier: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke-linecap="round"/></svg>',
     croix: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>',
     medaille: '<svg viewBox="0 0 48 48" aria-hidden="true"><path class="RUBAN" d="M15 3h7l4 13h-7zM33 3h-7l-4 13h7z"/><circle class="MEDAILLE" cx="24" cy="30" r="13"/><path class="RUBAN" d="M24 23.5l2 4.2 4.6.5-3.4 3.1 1 4.5-4.2-2.4-4.2 2.4 1-4.5-3.4-3.1 4.6-.5z"/></svg>',
   };
@@ -78,9 +100,8 @@
     else t = Math.round(abs / 86400000) + " jours";
     return d >= 0 ? "dans " + t : "il y a " + t;
   }
-  // Ces deux valeurs doivent rester égales à PLAFOND_POINTS et MAX_OUI_NON dans pb_hooks/jeu_lib.js.
+  // Cette valeur doit rester égale à PLAFOND_POINTS dans pb_hooks/jeu_lib.js.
   const PLAFOND_POINTS = 300;
-  const MAX_OUI_NON = 10;
   function pointsProba(pct) {
     const p = Math.min(99, Math.max(1, Number(pct) || 50));
     return Math.min(PLAFOND_POINTS, Math.round(1000 / p));
@@ -336,6 +357,7 @@
     nav.hidden = !connecte;
     majNav(hash);
     if (hash !== S.derniereRoute) window.scrollTo(0, 0);
+    app.classList.toggle("large", hash === "#/admin/candidats");
     S.derniereRoute = hash;
     let m;
     try {
@@ -583,7 +605,7 @@
 
   function saisieInitiale(p) {
     if (p.monProno && p.monProno.reponse) return copie(p.monProno.reponse);
-    return { choix: { option: null }, oui_non: { reponses: {} }, classement: { ordre: [] }, estimation: { valeur: "" }, vote: { vais: "", voudrais: "" } }[p.type];
+    return { choix: { option: null }, oui_non: { reponses: {} }, classement: { ordre: [] }, estimation: { valeur: "" }, scores: { valeurs: {} }, vote: { vais: "", voudrais: "" } }[p.type];
   }
   function saisieDe(p) {
     if (!S.saisie[p.id]) S.saisie[p.id] = saisieInitiale(p);
@@ -596,6 +618,10 @@
     if (p.type === "classement") return (s.ordre || []).length === (Number(p.config.places) || 3);
     if (p.type === "estimation") return s.valeur !== "" && s.valeur !== null && isFinite(Number(String(s.valeur).replace(",", ".")));
     if (p.type === "vote") return !!(s.vais || s.voudrais);
+    if (p.type === "scores") {
+      const v = s.valeurs || {};
+      return (p.options || []).length > 0 && (p.options || []).every((o) => v[o.id] !== "" && v[o.id] !== null && v[o.id] !== undefined && isFinite(Number(String(v[o.id]).replace(",", "."))));
+    }
     return false;
   }
 
@@ -644,17 +670,21 @@
   }
 
   function ancreType(t) {
-    return { choix: "choix", oui_non: "oui-non", classement: "classement", estimation: "estimation", vote: "vote" }[t];
+    return { choix: "choix", oui_non: "oui-non", classement: "classement", estimation: "estimation", scores: "scores", vote: "vote" }[t];
   }
 
   function explicationCourte(p) {
     const c = Number(p.coef) !== 1 ? " Les points de ce pari sont multipliés par " + String(p.coef).replace(".", ",") + "." : "";
     if (p.type === "choix") return "Une seule réponse. Si c’est la bonne, tu gagnes 10 ÷ sa probabilité : le gain est affiché sur chaque bulletin." + c;
-    if (p.type === "oui_non") return "Oui ou non pour " + MAX_OUI_NON + " noms au plus : choisis ceux dont tu es le plus sûr. Chaque bonne réponse rapporte 10 ÷ la probabilité de ta réponse. La probabilité affichée est celle du oui." + c;
+    if (p.type === "oui_non") return "Oui ou non pour autant de noms que tu veux. Chaque bonne réponse rapporte 10 ÷ la probabilité de ta réponse, une mauvaise ne coûte rien. La probabilité affichée est celle du oui." + c;
     if (p.type === "classement") return "Place les noms dans l’ordre. À la bonne place : 10 ÷ probabilité. Dans le classement mais mal placé : la moitié." + c;
     if (p.type === "estimation") {
       const pente = Number(p.config.pente) || 10;
       return "Donne un nombre. Tu pars de 100 points et tu en perds " + String(pente).replace(".", ",") + " par " + esc(p.config.unite === "%" ? "point de pourcentage" : "unité") + " d’écart avec le vrai résultat, sans descendre sous 0." + c;
+    }
+    if (p.type === "scores") {
+      const pente = Number(p.config.pente) || 10;
+      return "Donne le score de chaque candidat, en %. Pour chacun, tu pars de 100 points et tu en perds " + String(pente).replace(".", ",") + " par point d’écart avec son vrai score. Tu gagnes la moyenne : au plus 100 points." + c;
     }
     return "Facultatif, sans points. Tes réponses ne sont dévoilées qu’une fois les résultats saisis.";
   }
@@ -691,7 +721,7 @@
     if (p.type === "oui_non") {
       const reps = s.reponses || {};
       const n = Object.keys(reps).length;
-      return '<p class="discret petit">' + nb(n) + " réponse" + (n > 1 ? "s" : "") + " sur " + Math.min(MAX_OUI_NON, opts.length) + " possibles." + (n ? ' <button type="button" class="bouton-lien" data-action="on-effacer" data-pari="' + esc(p.id) + '"' + dis + ">Tout effacer</button>" : "") + "</p>" +
+      return '<p class="discret petit">' + nb(n) + " réponse" + (n > 1 ? "s" : "") + " sur " + nb(opts.length) + " noms." + (n ? ' <button type="button" class="bouton-lien" data-action="on-effacer" data-pari="' + esc(p.id) + '"' + dis + ">Tout effacer</button>" : "") + "</p>" +
         champFiltre(p) + '<div class="oui-non">' +
         opts.map((o) => {
           const v = reps[o.id] || "";
@@ -740,6 +770,14 @@
         '<div><input type="range" aria-label="Ajuster ta réponse" step="' + pas + '" min="' + esc(min) + '" max="' + esc(max) + '" value="' + esc(v === "" ? (min + max) / 2 : v) + '" data-input="valeur-curseur" data-pari="' + esc(p.id) + '"' + dis + '><div class="ligne entre petit discret"><span>' + esc(min) + "</span><span>" + esc(max) + "</span></div></div>" +
         "</div></div>" + tableauEcarts(p);
     }
+    if (p.type === "scores") {
+      const v = s.valeurs || {};
+      return champFiltre(p) + '<div class="carte"><div class="defile"><table class="admin-table scores-saisie"><tbody>' +
+        opts.map((o) => '<tr data-nom="' + esc(norm(o.label)) + '"><td><strong>' + esc(o.label) + '</strong><br><small class="discret">' + esc(partiDe(o.id)) + "</small></td>" +
+          '<td class="pct"><span class="ligne" style="flex-wrap:nowrap;gap:.375rem"><input type="number" inputmode="decimal" step="0.1" min="0" max="100" value="' + esc(v[o.id] === undefined || v[o.id] === null ? "" : v[o.id]) + '" data-input="score" data-pari="' + esc(p.id) + '" data-option="' + esc(o.id) + '" data-cle="sc-' + esc(o.id) + '" aria-label="Score de ' + esc(o.label) + '"' + dis + '><span class="unite">%</span></span></td></tr>'
+        ).join("") + "</tbody></table></div>" +
+        '<p class="petit discret" style="margin:.75rem 0 0" id="total-scores">' + texteTotalScores(p, s) + "</p></div>";
+    }
     if (p.type === "vote") {
       const select = (champ, titre) =>
         '<label class="champ"><span>' + titre + '</span><select data-input="vote" data-champ="' + champ + '" data-pari="' + esc(p.id) + '" data-cle="vote-' + champ + '"' + dis + '><option value="">Je ne réponds pas</option>' +
@@ -748,6 +786,17 @@
         '<p class="discret petit" style="margin:0">Facultatif. Personne ne vérifie : tu peux répondre ce que tu veux. Réponses dévoilées une fois les résultats saisis.</p></div>';
     }
     return "";
+  }
+
+  function texteTotalScores(p, s) {
+    const v = (s && s.valeurs) || {};
+    let total = 0;
+    let n = 0;
+    (p.options || []).forEach((o) => {
+      const x = Number(String(v[o.id] === undefined ? "" : v[o.id]).replace(",", "."));
+      if (v[o.id] !== "" && v[o.id] !== undefined && v[o.id] !== null && isFinite(x)) { total += x; n++; }
+    });
+    return "Total : " + pctTxt(Math.round(total * 10) / 10) + ", " + nb(n) + " score" + (n > 1 ? "s" : "") + " sur " + nb((p.options || []).length) + ". Les scores de tous les candidats font 100 %.";
   }
 
   function tableauEcarts(p) {
@@ -784,6 +833,10 @@
     }
     if (p.type === "classement") return (r.ordre || []).map((id, i) => (i + 1) + ". " + esc(libelle(p, id))).join("<br>");
     if (p.type === "estimation") return esc(String(r.valeur).replace(".", ",")) + " " + esc(p.config.unite || "");
+    if (p.type === "scores") {
+      const v = r.valeurs || {};
+      return Object.keys(v).sort((a, b) => v[b] - v[a]).slice(0, 3).map((id) => esc(libelle(p, id)) + " " + pctTxt(v[id])).join(", ") + (Object.keys(v).length > 3 ? "…" : "");
+    }
     if (p.type === "vote") {
       return (r.vais ? "Va voter : " + esc(libelle(p, r.vais)) : "") + (r.vais && r.voudrais ? "<br>" : "") + (r.voudrais ? "Aimerait : " + esc(libelle(p, r.voudrais)) : "");
     }
@@ -856,6 +909,15 @@
       html += '<p class="discret petit">Nombre de joueurs qui ont mis chaque nom dans leur classement.</p>' + barres(lignes, Math.max.apply(null, [1].concat(lignes.map((l) => l.valeur))));
     } else if (p.type === "estimation") {
       html += graphiqueEstimations(p);
+    } else if (p.type === "scores") {
+      const moy = st.moyennes || {};
+      const reels = res && res.valeurs ? res.valeurs : {};
+      const mes = mien && mien.valeurs ? mien.valeurs : {};
+      const lignes = p.options.slice().sort((a, b) => (reels[b.id] !== undefined ? reels[b.id] : moy[b.id] || 0) - (reels[a.id] !== undefined ? reels[a.id] : moy[a.id] || 0));
+      html += '<div class="defile"><table class="table-joueurs"><thead><tr><th>Candidat</th>' + (res ? '<th class="num">Résultat</th>' : "") + '<th class="num">Moyenne du groupe</th>' + (mien ? '<th class="num">Ton prono</th>' : "") + "</tr></thead><tbody>" +
+        lignes.map((o) => "<tr><td>" + esc(o.label) + "</td>" + (res ? '<td class="num"><strong>' + (reels[o.id] !== undefined ? pctTxt(reels[o.id]) : "") + "</strong></td>" : "") +
+          '<td class="num">' + (moy[o.id] !== undefined ? pctTxt(moy[o.id]) : "") + "</td>" + (mien ? '<td class="num">' + (mes[o.id] !== undefined ? pctTxt(mes[o.id]) : "") + "</td>" : "") + "</tr>").join("") +
+        "</tbody></table></div>";
     } else if (p.type === "vote") {
       const bloc = (titre, compte) => {
         const lignes = p.options.filter((o) => compte[o.id]).map((o) => ({ label: o.label, valeur: compte[o.id] })).sort((a, b) => b.valeur - a.valeur);
@@ -1129,7 +1191,7 @@
       ["Le Boulet d’or", "Le moins de points au classement général."],
       ["Le Grand Déçu", "Son candidat de cœur du 1er tour, déclaré dans « Mon vote », a fait le plus petit score."],
       ["Le Visionnaire", "A trouvé la bonne réponse la moins probable."],
-      ["Le Sniper", "Le plus de points sur les paris d’estimation."],
+      ["Le Sniper", "Le plus de points sur les paris d’estimation et de scores."],
       ["Le Duelliste", "Le plus de duels gagnés."],
       ["Le Kamikaze", "Le plus de réponses sur des probabilités de moins de 10 %."],
       ["La Girouette", "Le plus de paris modifiés avant la clôture."],
@@ -1146,14 +1208,14 @@
         .map((s) => '<li><a href="#/regles/' + s[0] + '">' + s[1] + "</a></li>").join("") + "</ol>" +
 
       '<section id="r-principe"><h2>Le principe</h2>' +
-      "<p>Chaque joueur fait des pronostics sur la présidentielle 2027 : qui aura ses 500 signatures, qui finira sur le podium, quel sera le taux de participation, qui sera élu. Les paris ouvrent et ferment au fil du calendrier électoral.</p>" +
+      "<p>Chaque joueur fait des pronostics sur la présidentielle 2027 : qui aura ses 500 signatures, qui finira sur le podium, les scores de chaque candidat, l’abstention, qui sera élu. Les paris ouvrent et ferment au fil du calendrier électoral.</p>" +
       "<p>Une bonne réponse rapporte des points, d’autant plus qu’elle était improbable. Une mauvaise réponse rapporte 0 : on ne perd jamais de points. Les points s’additionnent jusqu’au second tour, puis les trophées sont remis. Il n’y a ni argent, ni mise.</p></section>" +
 
       '<section id="r-etapes"><h2>Les étapes</h2><ol>' + calendrier + "</ol>" +
       '<p>Le <a href="#/calendrier">calendrier</a> montre les paris de chaque étape et leurs dates de clôture.</p></section>' +
 
       '<section id="r-points"><h2>Les points</h2>' +
-      "<p>Pour chaque réponse possible, l’admin du jeu indique une probabilité établie d’après les sondages. Elle est affichée sur chaque réponse, avec le nombre de points qu’elle rapporte.</p>" +
+      "<p>Chaque réponse possible a une probabilité, établie d’après les sondages. Pour les paris du 1er tour, le jeu la calcule à partir de la moyenne des intentions de vote. Elle est affichée sur chaque réponse, avec le nombre de points qu’elle rapporte.</p>" +
       '<div class="formule">Points gagnés = 10 ÷ <b>probabilité</b>, au plus ' + PLAFOND_POINTS + "</div>" +
       "<p>Une réponse donnée à 41 % rapporte 10 ÷ 0,41, soit 24 points. Plus la réponse est improbable, plus elle rapporte, jusqu’à " + PLAFOND_POINTS + " points : sous 3,4 % environ, le gain ne monte plus. Le classement ne se joue donc pas à la loterie sur un outsider.</p>" +
       '<div class="carte calculette"><label class="champ" style="margin:0"><span>Essaie avec une probabilité</span>' +
@@ -1167,7 +1229,7 @@
       '<section id="r-types"><h2>Les types de paris</h2>' +
       '<h3 id="r-choix">Un seul choix</h3><p>Tu choisis une réponse parmi les bulletins. Si c’est la bonne, tu gagnes 10 ÷ sa probabilité.</p>' +
       '<p class="discret">Exemple : pour « Le Boulet », tu choisis un candidat donné à 5 %. S’il fait bien le plus petit score, tu gagnes 200 points.</p>' +
-      '<h3 id="r-oui-non">Oui ou non</h3><p>Tu choisis jusqu’à ' + MAX_OUI_NON + ' noms de la liste, et pour chacun tu réponds oui ou non. Garde ceux dont tu es le plus sûr. La probabilité affichée est celle du oui ; celle du non est le reste jusqu’à 100 %. Chaque bonne réponse rapporte ses points, et ils s’additionnent.</p>' +
+      '<h3 id="r-oui-non">Oui ou non</h3><p>Pour chaque nom de la liste, tu réponds oui ou non, ou tu passes. Tu réponds pour autant de noms que tu veux. La probabilité affichée est celle du oui ; celle du non est le reste jusqu’à 100 %. Chaque bonne réponse rapporte ses points, ils s’additionnent, et une mauvaise réponse ne coûte rien.</p>' +
       '<p class="discret">Exemple : un candidat est donné à 30 % d’avoir ses signatures. Un oui juste rapporte 10 ÷ 0,30, soit 33 points. Un non juste rapporte 10 ÷ 0,70, soit 14 points. Comme ce pari compte beaucoup de noms, il a souvent un coefficient réduit.</p>' +
       '<h3 id="r-classement">Classement</h3><p>Tu places des noms dans l’ordre, par exemple le podium ou le flop 3 du 1er tour. La probabilité affichée est celle que le nom figure dans ce classement.</p>' +
       "<ul><li>Nom à la bonne place : 10 ÷ probabilité.</li><li>Nom présent dans le classement mais mal placé : la moitié.</li><li>Nom absent du classement : 0.</li></ul>" +
@@ -1176,6 +1238,8 @@
       '<div class="carte calculette"><label class="champ" style="margin:0"><span>Écart avec le résultat, pour 10 points perdus par point d’écart</span>' +
       '<input type="range" min="0" max="12" step="0.1" value="1.5" data-input="calc-ecart" aria-describedby="calc-ecart-sortie"></label>' +
       '<output id="calc-ecart-sortie">85<small>points à 1,5 point d’écart</small></output></div>' +
+      '<h3 id="r-scores">Scores</h3><p>Tu donnes le score de chaque candidat, en pourcentage des suffrages exprimés. Pour chaque candidat, tu pars de 100 points et tu en perds un certain nombre par point d’écart avec son vrai score, sans descendre sous 0. Tu gagnes la moyenne de ces points : au plus 100.</p>' +
+      '<p class="discret">Exemple, à 10 points perdus par point d’écart : tu donnes 30 % à un candidat qui fait 28 %, cela fait 80 points pour lui. Sur trois candidats à 80, 100 et 60 points, tu gagnes 80 points.</p>' +
       '<h3 id="r-vote">Mon vote</h3><p>Facultatif et sans points. À chaque tour, tu peux dire pour qui tu vas voter et pour qui tu aimerais voter. Personne ne vérifie : tu peux répondre ce que tu veux. Les réponses du groupe ne sont dévoilées qu’une fois les résultats saisis. Elles servent au trophée du Grand Déçu.</p></section>' +
 
       '<section id="r-cloture"><h2>Clôture et secret des paris</h2>' +
@@ -1199,7 +1263,7 @@
       '<section id="r-questions"><h2>Questions fréquentes</h2>' +
       "<h3>Deux joueurs ont le même nombre de points ?</h3><p>Ils partagent le même rang.</p>" +
       "<h3>Un candidat se retire alors que j’ai parié sur lui ?</h3><p>Ton pari reste valable. S’il n’est pas sur la liste officielle, il ne peut pas finir sur le podium : la réponse rapporte 0 point.</p>" +
-      "<h3>Qui fixe les probabilités ?</h3><p>L’admin du jeu, d’après les sondages publiés. Elles sont visibles par tout le monde sur chaque pari, et ne peuvent plus changer dès qu’un joueur a parié.</p>" +
+      "<h3>Qui fixe les probabilités ?</h3><p>L’admin du jeu saisit les intentions de vote, importées des sondages publiés et ajustées si besoin. Le jeu en déduit les probabilités de chaque pari du 1er tour en simulant 10 000 fois le scrutin, avec la marge d’erreur habituelle des sondages. Pour l’élu, il part des intentions de vote du 2nd tour. Les probabilités sont visibles par tout le monde sur chaque pari, et ne peuvent plus changer dès qu’un joueur a parié.</p>" +
       "<h3>Je peux changer de pseudo ?</h3><p>Oui, dans ton Profil. Tes paris, tes points et tes duels te suivent. Ta guilde, elle, ne change pas.</p>" +
       "<h3>J’ai oublié mon mot de passe.</h3><p>Demande à l’admin du jeu : il peut le réinitialiser.</p>" +
       "<h3>Un résultat me semble faux.</h3><p>Signale-le à l’admin : il peut corriger le résultat, et les points sont recalculés.</p></section>" +
@@ -1271,13 +1335,16 @@
     if (onglet === "pari") return vueEditionPari(id);
     if (onglet === "resultat") return vueResultat(id);
     const onglets = [["paris", "Paris"], ["candidats", "Candidats"], ["invitations", "Invitations"], ["joueurs", "Joueurs"]];
+
     let html = '<a class="retour" href="#/profil">' + ICONES.retour + "Profil</a><h1>Administration</h1>" +
       '<nav class="onglets" aria-label="Administration">' + onglets.map((o) => '<a href="#/admin/' + o[0] + '"' + (o[0] === onglet ? ' aria-current="page"' : "") + ">" + o[1] + "</a>").join("") + "</nav>";
-    if (onglet === "candidats") html += adminCandidats(e);
+    if (onglet === "candidats") html += await adminTableau();
     else if (onglet === "invitations") html += await adminInvitations();
     else if (onglet === "joueurs") html += await adminJoueurs(e);
     else html += adminParis(e);
     rendre(html);
+    const filtreTab = app.querySelector('[data-input="tab-filtre"]');
+    if (filtreTab && filtreTab.value) SAISIES["tab-filtre"](filtreTab);
   }
 
   function adminParis(e) {
@@ -1296,16 +1363,9 @@
     return html;
   }
 
-  function versLocal(iso) {
-    const ms = dms(iso);
-    if (!ms) return "";
-    const d = new Date(ms);
-    const z = (n) => String(n).padStart(2, "0");
-    return d.getFullYear() + "-" + z(d.getMonth() + 1) + "-" + z(d.getDate()) + "T" + z(d.getHours()) + ":" + z(d.getMinutes());
-  }
-
   function vueEditionPari(id) {
     const e = S.etat;
+    S.calendrier = null;
     if (!S.edition || S.edition.cle !== id) {
       const p = e.paris.find((x) => x.id === id);
       if (p) {
@@ -1322,13 +1382,19 @@
     if (ed.nbParieurs) html += '<div class="message message-info">' + pluriel(ed.nbParieurs, "joueur a", "joueurs ont") + " déjà parié : le type, le coefficient, le barème et les probabilités ne peuvent plus changer." +
       (ed.type === "oui_non" || ed.type === "vote" ? " Tu peux encore ajouter des noms tant que le pari est ouvert." : " Tu ne peux plus ajouter de réponse.") +
       " Le titre, la description et les libellés restent modifiables.</div>";
+    const lien = cfg.lien || "";
     html += '<fieldset><legend>Le pari</legend>' +
+      '<label class="champ"><span>Relié au tableau des candidats</span>' +
+      (ed.nbParieurs ? '<input type="text" value="' + esc(lien ? LIENS[lien][0] : "Non relié") + '" disabled>' :
+        '<select data-ed="lien" data-cle="ed-lien"><option value="">Non relié : réponses et cotes saisies à la main</option>' +
+        Object.keys(LIENS).map((k) => '<option value="' + k + '"' + (k === lien ? " selected" : "") + ">" + esc(LIENS[k][0]) + " (" + esc(TYPES[LIENS[k][1]]) + ")</option>").join("") + "</select>") +
+      "<small>" + (lien ? "Les réponses, les cotes et le résultat viennent du tableau des candidats." : "Un pari relié se remplit tout seul depuis le tableau des candidats.") + "</small></label>" +
       '<label class="champ"><span>Titre</span><input type="text" maxlength="150" value="' + esc(ed.titre) + '" data-ed="titre" data-cle="ed-titre"></label>' +
       '<label class="champ"><span>Description</span><textarea maxlength="2000" data-ed="description" data-cle="ed-description">' + esc(ed.description) + "</textarea><small>Ce que les joueurs doivent savoir pour parier : la question précise, la source du résultat.</small></label>" +
-      '<div class="grille-2"><label class="champ"><span>Type</span>' + (ed.nbParieurs ? '<input type="text" value="' + esc(TYPES[ed.type]) + '" disabled>' : choixSelect("type", TYPES, ed.type)) + "</label>" +
+      '<div class="grille-2"><label class="champ"><span>Type</span>' + (ed.nbParieurs || lien ? '<input type="text" value="' + esc(TYPES[ed.type]) + '" disabled>' : choixSelect("type", TYPES, ed.type)) + "</label>" +
       '<label class="champ"><span>Étape</span>' + choixSelect("phase", PHASES, ed.phase) + "</label>" +
-      '<label class="champ"><span>Ouverture</span><input type="datetime-local" value="' + versLocal(ed.ouverture) + '" data-ed="ouverture" data-cle="ed-ouverture"></label>' +
-      '<label class="champ"><span>Clôture</span><input type="datetime-local" value="' + versLocal(ed.cloture) + '" data-ed="cloture" data-cle="ed-cloture"><small>Pour un scrutin : 20:00 le jour du vote.</small></label>' +
+      champDate("ouverture", "Ouverture", ed.ouverture, "") +
+      champDate("cloture", "Clôture", ed.cloture, "Pour un scrutin : 20:00 le jour du vote.") +
       '<label class="champ"><span>Coefficient</span><input type="number" step="0.1" min="0.1" max="10" value="' + esc(ed.coef) + '" data-ed="coef" data-cle="ed-coef"><small>1 = normal, 2 = compte double, 0,2 = cinq fois moins.</small></label>' +
       '<div class="champ"><span>Statut</span><div class="radios" style="min-height:2.75rem">' +
       (ed.statut === "resolu" ? "<span>Résultat saisi</span>" :
@@ -1345,17 +1411,315 @@
         '<label class="champ"><span>Maximum</span><input type="number" value="' + esc(cfg.max !== undefined ? cfg.max : "") + '" data-edcfg="max"></label>' +
         "</div></fieldset>";
     } else {
+      if (ed.type === "scores") {
+        html += '<fieldset><legend>Réglages des scores</legend><div class="grille-2">' +
+          '<label class="champ"><span>Points perdus par point d’écart</span><input type="number" step="0.5" min="0.5" value="' + esc(cfg.pente || 10) + '" data-edcfg="pente"><small>Pour chaque candidat, on part de 100 points. Le joueur gagne la moyenne.</small></label>' +
+          "</div></fieldset>";
+      }
       if (ed.type === "classement") {
         html += '<fieldset><legend>Réglages du classement</legend><div class="grille-2">' +
           '<label class="champ"><span>Nombre de places</span><input type="number" min="1" max="5" value="' + esc(cfg.places || 3) + '" data-edcfg="places"></label>' +
           '<label class="champ"><span>Sens</span><select data-edcfg="sens"><option value="haut"' + (cfg.sens !== "bas" ? " selected" : "") + '>Les premiers (podium)</option><option value="bas"' + (cfg.sens === "bas" ? " selected" : "") + ">Les derniers (flop)</option></select></label></div></fieldset>";
       }
-      html += editeurOptions(ed, e);
+      html += lien && LIENS[lien] ? optionsReliees(ed) : editeurOptions(ed, e);
     }
     html += '<div class="action-pari">' +
       (ed.id && !ed.nbParieurs ? '<button type="button" class="bouton-lien" data-action="supprimer-pari">Supprimer ce pari</button>' : "<span></span>") +
       '<button type="button" class="bouton bouton-rouge" data-action="enregistrer-pari">Enregistrer</button></div>';
     rendre(html);
+  }
+
+  // ---------- Dates au format français : jj/mm/aaaa et hh:mm sur 24 heures ----------
+  // Le champ natif « datetime-local » suit la langue du navigateur (mois/jour/année et AM/PM en anglais) :
+  // on le remplace par deux champs texte et un petit calendrier.
+
+  const MOIS_ANNEE = new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric" });
+  function z2(n) { return String(n).padStart(2, "0"); }
+
+  function lireDateFr(jourTxt, heureTxt) {
+    const j = String(jourTxt || "").trim().match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})$/);
+    const ht = String(heureTxt || "").trim();
+    const h = ht.match(/^(\d{1,2})\s*(?:[:hH.]\s*(\d{2})?)?$/) || ht.match(/^(\d{2})(\d{2})$/);
+    if (!j || !h) return 0;
+    const jour = Number(j[1]);
+    const mois = Number(j[2]);
+    const annee = j[3].length === 2 ? 2000 + Number(j[3]) : Number(j[3]);
+    const heure = Number(h[1]);
+    const minute = h[2] ? Number(h[2]) : 0;
+    if (heure > 23 || minute > 59) return 0;
+    const d = new Date(annee, mois - 1, jour, heure, minute);
+    if (d.getFullYear() !== annee || d.getMonth() !== mois - 1 || d.getDate() !== jour) return 0;
+    return d.getTime();
+  }
+
+  function champDate(k, titre, iso, aide) {
+    const ms = dms(iso);
+    const d = ms ? new Date(ms) : null;
+    const jour = d ? z2(d.getDate()) + "/" + z2(d.getMonth() + 1) + "/" + d.getFullYear() : "";
+    const heure = d ? z2(d.getHours()) + ":" + z2(d.getMinutes()) : "";
+    const invalide = S.edition && S.edition.datesInvalides && S.edition.datesInvalides[k];
+    return '<div class="champ"><span>' + esc(titre) + '</span><div class="champ-date' + (invalide ? " invalide" : "") + '" data-champ-date="' + k + '">' +
+      '<input type="text" inputmode="numeric" autocomplete="off" placeholder="jj/mm/aaaa" maxlength="10" value="' + jour + '" data-date="jour" data-champ="' + k + '" data-cle="ed-' + k + '-jour" aria-label="' + esc(titre) + ', date au format jour/mois/année">' +
+      '<button type="button" class="bouton-calendrier" data-action="ouvrir-calendrier" data-champ="' + k + '" aria-label="Choisir la date dans le calendrier" aria-expanded="false">' + ICONES.calendrier + "</button>" +
+      '<input type="text" inputmode="numeric" autocomplete="off" placeholder="hh:mm" maxlength="5" value="' + heure + '" data-date="heure" data-champ="' + k + '" data-cle="ed-' + k + '-heure" aria-label="' + esc(titre) + ', heure sur 24 heures">' +
+      '<div class="calendrier" hidden></div></div>' +
+      '<small class="date-erreur"' + (invalide ? "" : " hidden") + ">Date ou heure non valide. Exemple : 18/04/2027 et 20:00.</small>" +
+      (aide ? "<small>" + esc(aide) + "</small>" : "") + "</div>";
+  }
+
+  // final : à la sortie du champ. On ne signale une erreur qu'à ce moment, pas pendant la frappe.
+  function saisieDate(el, final) {
+    const ed = S.edition;
+    if (!ed) return;
+    const k = el.dataset.champ;
+    const cont = el.closest("[data-champ-date]");
+    const champJour = cont.querySelector('[data-date="jour"]');
+    const champHeure = cont.querySelector('[data-date="heure"]');
+    const ms = lireDateFr(champJour.value, champHeure.value);
+    ed.datesInvalides = ed.datesInvalides || {};
+    if (ms) {
+      ed[k] = new Date(ms).toISOString();
+      ed.datesInvalides[k] = false;
+      if (final) {
+        const d = new Date(ms);
+        champJour.value = z2(d.getDate()) + "/" + z2(d.getMonth() + 1) + "/" + d.getFullYear();
+        champHeure.value = z2(d.getHours()) + ":" + z2(d.getMinutes());
+      }
+    } else {
+      ed.datesInvalides[k] = true;
+    }
+    if (final || ms) {
+      cont.classList.toggle("invalide", !ms);
+      const msg = cont.parentNode.querySelector(".date-erreur");
+      if (msg) msg.hidden = !!ms;
+    }
+  }
+
+  function dessinerCalendrier() {
+    const c = S.calendrier;
+    app.querySelectorAll(".calendrier").forEach((x) => { x.hidden = true; x.innerHTML = ""; });
+    app.querySelectorAll(".bouton-calendrier").forEach((b) => b.setAttribute("aria-expanded", "false"));
+    if (!c) return;
+    const cont = app.querySelector('[data-champ-date="' + c.champ + '"]');
+    if (!cont) { S.calendrier = null; return; }
+    const ms = dms(S.edition && S.edition[c.champ]);
+    const choisi = ms ? new Date(ms) : null;
+    const auj = new Date(maintenant());
+    const premier = new Date(c.annee, c.mois, 1);
+    const decalage = (premier.getDay() + 6) % 7;
+    const nbJours = new Date(c.annee, c.mois + 1, 0).getDate();
+    const memeJour = (d, a, m, j) => d && d.getFullYear() === a && d.getMonth() === m && d.getDate() === j;
+    let grille = ["lu", "ma", "me", "je", "ve", "sa", "di"].map((x) => '<span class="cal-jsem">' + x + "</span>").join("");
+    for (let i = 0; i < decalage; i++) grille += "<span></span>";
+    for (let j = 1; j <= nbJours; j++) {
+      const classes = (memeJour(choisi, c.annee, c.mois, j) ? " choisi" : "") + (memeJour(auj, c.annee, c.mois, j) ? " aujourdhui" : "");
+      grille += '<button type="button" class="cal-jour' + classes + '" data-action="cal-jour" data-jour="' + z2(j) + "/" + z2(c.mois + 1) + "/" + c.annee + '"' +
+        (memeJour(choisi, c.annee, c.mois, j) ? ' aria-current="date"' : "") + ">" + j + "</button>";
+    }
+    const cal = cont.querySelector(".calendrier");
+    cal.innerHTML = '<div class="cal-entete"><button type="button" class="cal-nav" data-action="cal-mois" data-delta="-1" aria-label="Mois précédent">‹</button>' +
+      "<strong>" + esc(MOIS_ANNEE.format(premier)) + '</strong><button type="button" class="cal-nav" data-action="cal-mois" data-delta="1" aria-label="Mois suivant">›</button></div>' +
+      '<div class="cal-grille">' + grille + "</div>" +
+      '<div class="cal-pied"><button type="button" class="bouton-lien" data-action="cal-jour" data-jour="' + z2(auj.getDate()) + "/" + z2(auj.getMonth() + 1) + "/" + auj.getFullYear() + '">Aujourd’hui</button>' +
+      '<button type="button" class="bouton-lien" data-action="cal-mois" data-delta="-12">Année précédente</button><button type="button" class="bouton-lien" data-action="cal-mois" data-delta="12">Année suivante</button></div>';
+    cal.hidden = false;
+    cont.querySelector(".bouton-calendrier").setAttribute("aria-expanded", "true");
+  }
+
+  function fermerCalendrier() {
+    S.calendrier = null;
+    dessinerCalendrier();
+  }
+
+  // ---------- Paris reliés au tableau des candidats ----------
+
+  function configParDefaut(type, lien) {
+    let c = {};
+    if (type === "estimation") c = { unite: "%", pente: 10, decimales: 1, min: 0, max: 100 };
+    if (type === "classement") c = { places: 3, sens: lien === "flop_t1" ? "bas" : "haut" };
+    if (type === "scores") c = { unite: "%", pente: 10 };
+    if (lien === "nb_officiels") c = { unite: "candidats", pente: 20, decimales: 0, min: 0, max: 60 };
+    if (lien === "blanc_t1" || lien === "blanc_t2") c.pente = 20;
+    if (lien === "blanc_t1" || lien === "blanc_t2") c.max = 30;
+    if (lien === "score_vainqueur_t2") c.min = 50;
+    if (lien) c.lien = lien;
+    return c;
+  }
+
+  function optionsReliees(ed) {
+    const lien = ed.config.lien;
+    const avecPct = ed.type === "choix" || ed.type === "oui_non" || ed.type === "classement";
+    let html = "<fieldset><legend>Réponses possibles (" + ed.options.length + ")</legend>" +
+      '<p class="discret petit">Elles viennent du <a href="#/admin/candidats">tableau des candidats</a>' + (avecPct ? ", avec leurs cotes" : "") +
+      ". Elles sont remises à jour à chaque enregistrement du tableau ou de ce pari, tant que personne n’a parié." +
+      (ed.type === "oui_non" || ed.type === "vote" ? " Ensuite, seuls les nouveaux noms sont ajoutés, jusqu’à la clôture." : " Ensuite, elles sont figées.") + "</p>";
+    if (!ed.options.length) {
+      html += '<p class="discret">' + (lien === "elu" || lien === "scores_t2" || lien === "vote_t2"
+        ? "Les deux finalistes apparaîtront dès que les scores du 1er tour seront saisis dans le tableau."
+        : "Les réponses apparaîtront à l’enregistrement.") + "</p>";
+    } else {
+      html += '<div class="defile"><table class="admin-table"><thead><tr><th>Réponse</th>' + (avecPct ? '<th class="num">Cote</th><th>Gain</th>' : "") + "</tr></thead><tbody>" +
+        ed.options.map((o) => "<tr><td>" + esc(o.label) + "</td>" +
+          (avecPct ? '<td class="num">' + (o.pct === null || o.pct === undefined ? '<span class="discret">à compléter</span>' : pctTxt(o.pct)) + '</td><td><span class="gain-apercu">' + apercuGain(ed, o.pct) + "</span></td>" : "") + "</tr>").join("") +
+        "</tbody></table></div>";
+    }
+    return html + "</fieldset>";
+  }
+
+  // ---------- Tableau des candidats ----------
+
+  function texteBilan(b) {
+    if (!b) return "";
+    const morceaux = [];
+    if (b.majs) morceaux.push(pluriel(b.majs, "pari mis à jour", "paris mis à jour"));
+    if (b.resolus) morceaux.push(pluriel(b.resolus, "pari résolu", "paris résolus"));
+    if (b.corriges) morceaux.push(pluriel(b.corriges, "résultat corrigé", "résultats corrigés"));
+    return morceaux.length ? morceaux.join(", ") + "." : "Aucun pari à mettre à jour.";
+  }
+
+  function rangTxt(n) { return n === 1 ? "1er" : n + "e"; }
+
+  async function adminTableau() {
+    const t = S.tableauFrais && S.tableau ? S.tableau : await api("/api/jeu/admin/tableau");
+    S.tableau = t;
+    S.tableauFrais = false;
+    const sc = t.scrutin || {};
+    const cotes = t.cotes || {};
+    const ordreStatut = { officiel: 0, declare: 1, non_retenu: 2, retire: 3 };
+    const liste = t.candidats.slice().sort((a, b) =>
+      (ordreStatut[a.statut] - ordreStatut[b.statut]) ||
+      ((b.intention_t1 === null ? -1 : b.intention_t1) - (a.intention_t1 === null ? -1 : a.intention_t1)) ||
+      a.nom.localeCompare(b.nom));
+    // Rangs réels, d'après les scores saisis.
+    const rang = (champ, ids) => {
+      const r = {};
+      t.candidats.filter((c) => c[champ] !== null && (!ids || ids.indexOf(c.id) >= 0)).sort((a, b) => b[champ] - a[champ]).forEach((c, i) => { r[c.id] = i + 1; });
+      return r;
+    };
+    const rangT1 = rang("score_t1", cotes.candidatsT1);
+    const rangT2 = rang("score_t2", cotes.finalistes);
+    const val = (v) => (v === null || v === undefined ? "" : v);
+    const num = (c, k, min, max, titre) => '<td class="pct"><input type="number" inputmode="decimal" step="0.1" min="' + min + '" max="' + max + '" value="' + esc(val(c[k])) + '" data-tab="' + k + '" data-input="tab-num" aria-label="' + esc(titre + " de " + c.nom) + '"></td>';
+    const statut = (c) => '<select data-tab="statut" aria-label="Statut de ' + esc(c.nom) + '">' + Object.keys(STATUTS_CANDIDAT).map((k) => '<option value="' + k + '"' + (k === c.statut ? " selected" : "") + ">" + STATUTS_CANDIDAT[k] + "</option>").join("") + "</select>";
+    const somme = (k) => Math.round(t.candidats.reduce((s, c) => s + (c[k] === null ? 0 : c[k]), 0) * 10) / 10;
+
+    let html = '<p class="discret">Un seul tableau pour tout le scrutin. Les paris reliés y prennent leurs réponses, leurs cotes et leur résultat. ' +
+      "Les cotes d’un pari sont figées dès qu’un premier joueur a parié dessus.</p>";
+
+    // Sondages
+    const so = sc.sondage;
+    html += '<div class="carte" style="margin-bottom:1.5rem"><h3 style="margin-top:0">Intentions de vote</h3>' +
+      '<p class="petit">Le bouton importe la moyenne des sondages du 1er tour publiés ces dernières semaines : pour chaque candidat, la moyenne des hypothèses de chaque sondage, puis la moyenne des sondages. Tu peux ensuite ajuster chaque valeur dans le tableau.</p>' +
+      (so ? '<p class="petit discret">Dernier import le ' + esc(jour(dms(so.importe_le))) + " : " + pluriel(so.nb || 0, "sondage") + (so.du ? " réalisés du " + esc(jour(dms(so.du))) + " au " + esc(jour(dms(so.au))) : "") + '. Source : <a href="' + esc(so.url) + '" target="_blank" rel="noopener">' + esc(so.source) + "</a>, données mises à jour le " + esc(jour(dms(so.mise_a_jour))) + ".</p>" : "") +
+      (S.rapportImport ? rapportImport(S.rapportImport) : "") +
+      '<button type="button" class="bouton bouton-clair" data-action="importer-sondages">Importer les intentions de vote</button>' +
+      '<p class="petit discret" style="margin-bottom:0">Les sondages du 2nd tour testent des duels hypothétiques : les intentions du 2nd tour se saisissent à la main, une fois les finalistes connus.</p></div>';
+    S.rapportImport = null;
+
+    // Étapes
+    const etape = (k, titre, aide) => '<label class="etape-scrutin"><input type="checkbox" data-etape="' + k + '"' + (sc[k] ? " checked" : "") + "><span><strong>" + titre + "</strong><small>" + aide + "</small></span></label>";
+    html += '<fieldset><legend>Avancement du scrutin</legend>' +
+      etape("liste_officielle", "La liste officielle est publiée", "Les candidats au statut « Sur la liste officielle » ont leurs 500 signatures. Résout les paris des parrainages.") +
+      etape("resultats_t1", "Les résultats du 1er tour sont définitifs", "Résout les paris du 1er tour d’après les scores, le vote blanc et l’abstention.") +
+      etape("resultats_t2", "Les résultats du 2nd tour sont définitifs", "Résout les paris du 2nd tour.") +
+      '<p class="petit discret" style="margin:0">Un pari n’est résolu qu’après sa clôture. Si tu corriges un score ensuite, les points sont recalculés.</p></fieldset>';
+
+    // Le tableau
+    html += '<div class="ligne entre" style="margin:1.5rem 0 .75rem"><h2 style="margin:0">Candidats</h2>' +
+      '<input type="search" placeholder="Chercher un nom" aria-label="Chercher un candidat" data-input="tab-filtre" value="' + esc(S.filtreTableau || "") + '" style="max-width:16rem"></div>' +
+      '<div class="defile"><table class="admin-table tableau-candidats"><thead><tr>' +
+      "<th>Candidat</th><th>Parti</th><th>Statut</th>" +
+      '<th class="num">Cote 500 sig.</th><th class="num">Intentions T1</th><th class="num">Intentions T2</th><th class="num">Score T1</th><th class="num">Score T2</th><th>Rang</th>' +
+      "</tr></thead><tbody>" +
+      liste.map((c) => {
+        const r1 = rangT1[c.id];
+        const r2 = rangT2[c.id];
+        const rangs = (r1 ? "T1 : " + rangTxt(r1) + (cotes.finalistes && cotes.finalistes.indexOf(c.id) >= 0 ? ", qualifié" : "") : "") + (r2 ? "<br>T2 : " + (r2 === 1 ? "élu" : rangTxt(r2)) : "");
+        return '<tr data-ligne-cand="' + esc(c.id) + '" data-nom-cand="' + esc(c.nom) + '" class="statut-' + esc(c.statut) + '">' +
+          '<td><input type="text" value="' + esc(c.nom) + '" data-tab="nom" maxlength="80" aria-label="Nom"></td>' +
+          '<td><input type="text" value="' + esc(c.parti) + '" data-tab="parti" maxlength="120" aria-label="Parti de ' + esc(c.nom) + '"></td>' +
+          "<td>" + statut(c) + "</td>" +
+          num(c, "cote_parrainages", 1, 99, "Cote des 500 signatures") + num(c, "intention_t1", 0, 100, "Intention de vote au 1er tour") +
+          num(c, "intention_t2", 0, 100, "Intention de vote au 2nd tour") + num(c, "score_t1", 0, 100, "Score au 1er tour") + num(c, "score_t2", 0, 100, "Score au 2nd tour") +
+          '<td class="petit">' + rangs + "</td></tr>";
+      }).join("") +
+      '</tbody><tfoot><tr><th colspan="3">Total</th><th></th>' +
+      ["intention_t1", "intention_t2", "score_t1", "score_t2"].map((k) => '<th class="num" data-total="' + k + '">' + pctTxt(somme(k)) + "</th>").join("") + "<th></th></tr></tfoot></table></div>";
+
+    // Hors candidats
+    const champScrutin = (tour, k, titre) => '<td class="pct"><input type="number" inputmode="decimal" step="0.01" min="0" max="100" value="' + esc(val((sc[tour] || {})[k])) + '" data-scrutin="' + tour + "." + k + '" aria-label="' + esc(titre) + '"></td>';
+    html += '<div class="defile" style="margin-top:1rem"><table class="admin-table" style="max-width:34rem"><thead><tr><th>Hors candidats</th><th class="num">1er tour</th><th class="num">2nd tour</th></tr></thead><tbody>' +
+      "<tr><td>Vote blanc, en % des votants</td>" + champScrutin("t1", "blanc", "Vote blanc au 1er tour") + champScrutin("t2", "blanc", "Vote blanc au 2nd tour") + "</tr>" +
+      "<tr><td>Abstention, en % des inscrits</td>" + champScrutin("t1", "abstention", "Abstention au 1er tour") + champScrutin("t2", "abstention", "Abstention au 2nd tour") + "</tr>" +
+      "</tbody></table></div>";
+
+    html += '<div class="action-pari"><span class="petit discret">Les cotes 500 signatures vont de 1 à 99 %. Les intentions et les scores sont en % des suffrages exprimés.</span>' +
+      '<button type="button" class="bouton bouton-rouge" data-action="enregistrer-tableau">Enregistrer le tableau</button></div>';
+
+    // Cotes calculées
+    const ids = (cotes.candidatsT1 || []);
+    const parId2 = parId(t.candidats);
+    const c1 = (m, id) => (m && m[id] !== undefined ? pctTxt(m[id]) : "");
+    html += '<h2>Cotes calculées</h2><p class="petit discret">Pour les paris du 1er tour, le jeu simule 10 000 fois le scrutin à partir des intentions de vote, avec une marge d’erreur d’environ 4 points pour un candidat à 30 % et d’1 point pour un candidat à 4 %. ' +
+      "Un candidat sans intention de vote compte pour 0,5 %. Une cote ne descend jamais sous 1 % ni ne dépasse 99 %. " +
+      "Pour l’élu, la cote vient de l’écart entre les deux finalistes dans les intentions du 2nd tour. Les candidats du 1er tour sont ceux de la liste officielle, ou à défaut les déclarés. Ce tableau se met à jour à l’enregistrement.</p>" +
+      (ids.length ? '<div class="defile"><table class="admin-table"><thead><tr><th>Candidat</th><th class="num">En tête</th><th class="num">Qualifié</th><th class="num">Podium</th><th class="num">Flop 3</th><th class="num">Dernier</th><th class="num">Élu</th></tr></thead><tbody>' +
+        ids.slice().sort((a, b) => ((parId2[b] || {}).intention_t1 || 0) - ((parId2[a] || {}).intention_t1 || 0)).map((id) =>
+          "<tr><td>" + esc((parId2[id] || {}).nom || "") + '</td><td class="num">' + c1(cotes.premier, id) + '</td><td class="num">' + c1(cotes.qualifie, id) + '</td><td class="num">' + c1(cotes.podium, id) +
+          '</td><td class="num">' + c1(cotes.flop, id) + '</td><td class="num">' + c1(cotes.dernier, id) + '</td><td class="num">' + c1(cotes.elu, id) + "</td></tr>").join("") +
+        "</tbody></table></div>" : '<p class="discret">Aucun candidat déclaré ou officiel.</p>');
+
+    // Paris reliés
+    html += "<h2>Paris reliés au tableau</h2>" + (t.paris.length
+      ? '<div class="defile"><table class="admin-table"><thead><tr><th>Pari</th><th>Relié à</th><th>Statut</th><th class="num">Réponses</th><th class="num">Joueurs</th></tr></thead><tbody>' +
+        t.paris.map((p) => '<tr><td><a href="#/admin/pari/' + esc(p.id) + '">' + esc(p.titre) + "</a></td><td>" + esc((t.liens[p.lien] || {}).nom || p.lien) + "</td><td>" +
+          esc({ brouillon: "Brouillon", publie: "Publié", resolu: "Résolu" }[p.statut] || p.statut) + '</td><td class="num">' + (p.nbOptions || "") + '</td><td class="num">' + p.nbPronos + (p.nbPronos ? ' <small class="discret">cotes figées</small>' : "") + "</td></tr>").join("") +
+        "</tbody></table></div>"
+      : '<p class="discret">Aucun pari relié. Dans un pari, choisis « Relié au tableau des candidats ».</p>');
+
+    html += '<form class="carte" data-form="candidat" novalidate style="margin-top:1.5rem"><h3 style="margin-top:0">Ajouter un candidat</h3>' +
+      '<p class="petit discret">Enregistre d’abord le tableau si tu y as fait des changements : l’ajout recharge la page.</p><div class="grille-2">' +
+      '<label class="champ"><span>Nom</span><input type="text" name="nom" maxlength="80" required></label>' +
+      '<label class="champ"><span>Parti</span><input type="text" name="parti" maxlength="120"></label></div>' +
+      '<button class="bouton" type="submit">Ajouter</button></form>';
+    return html;
+  }
+
+  function rapportImport(r) {
+    const lignes = [];
+    lignes.push(pluriel(r.trouves.length, "candidat mis à jour", "candidats mis à jour") + ".");
+    if (r.horsTableau.length) lignes.push("Dans les sondages mais pas dans le tableau, donc ignorés : " + r.horsTableau.join(", ") + ".");
+    if (r.sansSondage.length) lignes.push("Déclarés ou officiels mais absents des sondages, intention inchangée : " + r.sansSondage.join(", ") + ".");
+    return '<div class="message message-info petit">' + lignes.map(esc).join("<br>") + "</div>";
+  }
+
+  function lireTableau() {
+    const candidats = Array.prototype.map.call(app.querySelectorAll("[data-ligne-cand]"), (tr) => {
+      const v = (k) => tr.querySelector('[data-tab="' + k + '"]').value;
+      return {
+        id: tr.dataset.ligneCand, nom: v("nom"), parti: v("parti"), statut: v("statut"),
+        cote_parrainages: v("cote_parrainages"), intention_t1: v("intention_t1"), intention_t2: v("intention_t2"), score_t1: v("score_t1"), score_t2: v("score_t2"),
+      };
+    });
+    const scrutin = { t1: {}, t2: {} };
+    app.querySelectorAll("[data-etape]").forEach((c) => { scrutin[c.dataset.etape] = c.checked; });
+    app.querySelectorAll("[data-scrutin]").forEach((i) => {
+      const k = i.dataset.scrutin.split(".");
+      scrutin[k[0]][k[1]] = i.value;
+    });
+    return { candidats: candidats, scrutin: scrutin };
+  }
+
+  function majTotauxTableau() {
+    ["intention_t1", "intention_t2", "score_t1", "score_t2"].forEach((k) => {
+      let s = 0;
+      app.querySelectorAll('[data-tab="' + k + '"]').forEach((i) => {
+        const v = Number(String(i.value).replace(",", "."));
+        if (i.value !== "" && isFinite(v)) s += v;
+      });
+      const cell = app.querySelector('[data-total="' + k + '"]');
+      if (cell) cell.textContent = pctTxt(Math.round(s * 10) / 10);
+    });
   }
 
   function aidePct(type) {
@@ -1376,7 +1740,7 @@
   }
 
   function editeurOptions(ed, e) {
-    const avecPct = ed.type !== "vote";
+    const avecPct = ed.type !== "vote" && ed.type !== "scores";
     const dejaLa = {};
     ed.options.forEach((o) => { dejaLa[o.id] = true; });
     const candidatsLibres = e.candidats.filter((c) => !dejaLa[c.id]);
@@ -1411,12 +1775,13 @@
     if (!p) { rendre('<div class="message message-erreur">Pari introuvable.</div>'); return; }
     if (!S.resolution[id]) {
       const r = p.resultat ? copie(p.resultat) : null;
-      S.resolution[id] = r || { choix: { option: null }, oui_non: { oui: [] }, classement: { ordre: [] }, estimation: { valeur: "" }, vote: { pourcentages: {} } }[p.type];
+      S.resolution[id] = r || { choix: { option: null }, oui_non: { oui: [] }, classement: { ordre: [] }, estimation: { valeur: "" }, scores: { valeurs: {} }, vote: { pourcentages: {} } }[p.type];
     }
     const r = S.resolution[id];
     let html = '<a class="retour" href="#/admin/paris">' + ICONES.retour + "Tous les paris</a><h1>Résultat : " + esc(p.titre) + "</h1>";
     if (p.etat !== "clos" && p.etat !== "resolu") html += '<div class="message message-erreur">Ce pari n’est pas encore clos. Le résultat pourra être saisi après le ' + heure(dms(p.cloture)) + ".</div>";
     html += '<p class="discret">' + pluriel(p.nbParieurs, "joueur a parié", "joueurs ont parié") + ". En enregistrant, les points de chacun sont calculés. Tu pourras corriger le résultat ensuite : tout sera recalculé.</p>";
+    if (p.config && p.config.lien) html += '<div class="message message-info">Ce pari est relié au tableau des candidats : son résultat est calculé tout seul dès que tu coches l’étape correspondante dans le <a href="#/admin/candidats">tableau</a>. Un résultat saisi ici sera remplacé par celui du tableau.</div>';
 
     if (p.type === "choix") {
       html += '<div class="bulletins" role="radiogroup" aria-label="Bonne réponse">' + p.options.map((o) =>
@@ -1437,6 +1802,10 @@
       }
     } else if (p.type === "estimation") {
       html += '<label class="champ" style="max-width:16rem"><span>Valeur officielle (' + esc(p.config.unite || "") + ')</span><input type="number" step="any" value="' + esc(r.valeur) + '" data-input="res-valeur" data-pari="' + esc(p.id) + '"></label>';
+    } else if (p.type === "scores") {
+      html += '<p>Le score officiel de chaque candidat, en % des suffrages exprimés.</p><div class="defile"><table class="admin-table"><tbody>' + p.options.map((o) =>
+        "<tr><td>" + esc(o.label) + '</td><td class="pct"><input type="number" step="0.01" min="0" max="100" value="' + esc((r.valeurs || {})[o.id] !== undefined ? r.valeurs[o.id] : "") + '" data-input="res-score" data-pari="' + esc(p.id) + '" data-option="' + esc(o.id) + '" aria-label="Score de ' + esc(o.label) + '"></td></tr>'
+      ).join("") + "</tbody></table></div>";
     } else if (p.type === "vote") {
       html += '<p>Facultatif : les pourcentages officiels de chaque candidat. Ils s’affichent aux joueurs et servent au trophée du Grand Déçu (pour le 1er tour). Laisse vide ce que tu ne connais pas.</p>' +
         '<div class="defile"><table class="admin-table"><tbody>' + p.options.map((o) =>
@@ -1446,21 +1815,6 @@
     html += '<div class="action-pari">' + (p.etat === "resolu" ? '<button type="button" class="bouton-lien" data-action="annuler-resultat" data-pari="' + esc(p.id) + '">Annuler le résultat</button>' : "<span></span>") +
       '<button type="button" class="bouton bouton-rouge" data-action="enregistrer-resultat" data-pari="' + esc(p.id) + '"' + (p.etat === "clos" || p.etat === "resolu" ? "" : " disabled") + ">Enregistrer le résultat et calculer les points</button></div>";
     rendre(html);
-  }
-
-  function adminCandidats(e) {
-    const liste = e.candidats.slice().sort((a, b) => a.nom.localeCompare(b.nom));
-    const select = (val, cle) => '<select data-cand="statut" data-cle="' + cle + '">' + Object.keys(STATUTS_CANDIDAT).map((k) => '<option value="' + k + '"' + (k === val ? " selected" : "") + ">" + STATUTS_CANDIDAT[k] + "</option>").join("") + "</select>";
-    return '<p class="discret">Changer le statut d’un candidat ne modifie pas les paris déjà créés : ajoute ou retire-le des réponses possibles depuis chaque pari. Un nouveau nom est reporté automatiquement dans les paris.</p>' +
-      '<form class="carte" data-form="candidat" novalidate style="margin-bottom:1.5rem"><h3 style="margin-top:0">Ajouter un candidat</h3><div class="grille-2">' +
-      '<label class="champ"><span>Nom</span><input type="text" name="nom" maxlength="80" required></label>' +
-      '<label class="champ"><span>Parti</span><input type="text" name="parti" maxlength="120"></label></div>' +
-      '<button class="bouton" type="submit">Ajouter</button></form>' +
-      '<div class="defile"><table class="admin-table"><thead><tr><th>Nom</th><th>Parti</th><th>Statut</th><th></th></tr></thead><tbody>' +
-      liste.map((c) =>
-        '<tr data-ligne-cand="' + esc(c.id) + '"><td><input type="text" value="' + esc(c.nom) + '" data-cand="nom" maxlength="80" aria-label="Nom"></td><td><input type="text" value="' + esc(c.parti) + '" data-cand="parti" maxlength="120" aria-label="Parti"></td>' +
-        "<td>" + select(c.statut, "cs-" + c.id) + '</td><td class="actions"><button type="button" class="bouton bouton-petit bouton-clair" data-action="enregistrer-candidat" data-id="' + esc(c.id) + '">Enregistrer</button></td></tr>'
-      ).join("") + "</tbody></table></div>";
   }
 
   async function adminInvitations() {
@@ -1522,10 +1876,6 @@
       const s = saisieDe(p);
       s.reponses = s.reponses || {};
       if (s.reponses[el.dataset.option] === el.dataset.val) delete s.reponses[el.dataset.option];
-      else if (s.reponses[el.dataset.option] === undefined && Object.keys(s.reponses).length >= MAX_OUI_NON) {
-        notifier("Tu as déjà répondu pour " + MAX_OUI_NON + " noms : retire-en un pour en choisir un autre.", true);
-        return;
-      }
       else s.reponses[el.dataset.option] = el.dataset.val;
       Son.pop();
       rafraichirPari(p);
@@ -1627,6 +1977,8 @@
       vueEditionPari(S.edition.cle);
     },
     "enregistrer-pari": async (el) => {
+      const invalide = ["ouverture", "cloture"].find((k) => S.edition && S.edition.datesInvalides && S.edition.datesInvalides[k]);
+      if (invalide) throw new Error("La date " + (invalide === "ouverture" ? "d’ouverture" : "de clôture") + " n’est pas valide : jj/mm/aaaa et hh:mm, par exemple 18/04/2027 et 20:00.");
       el.disabled = true;
       try {
         const ed = S.edition;
@@ -1690,12 +2042,65 @@
       notifier("Résultat annulé.");
       vueResultat(el.dataset.pari);
     },
-    "enregistrer-candidat": async (el) => {
-      const ligne = el.closest("tr");
-      const val = (k) => ligne.querySelector('[data-cand="' + k + '"]').value;
-      await api("/api/jeu/admin/candidat", { method: "POST", body: { id: el.dataset.id, nom: val("nom"), parti: val("parti"), statut: val("statut") } });
-      await chargerEtat(true);
-      notifier("Candidat enregistré.");
+    "enregistrer-tableau": async (el) => {
+      el.disabled = true;
+      try {
+        const res = await api("/api/jeu/admin/tableau", { method: "POST", body: lireTableau() });
+        S.tableau = res;
+        S.tableauFrais = true;
+        invalider();
+        await chargerEtat(true);
+        notifier("Tableau enregistré. " + texteBilan(res.bilan));
+        vueAdmin("candidats");
+      } catch (err) {
+        el.disabled = false;
+        throw err;
+      }
+    },
+    "importer-sondages": async (el) => {
+      if (S.tableau && S.tableau.candidats.some((c) => c.intention_t1 !== null) &&
+        !confirm("Remplacer les intentions de vote du 1er tour par la moyenne des derniers sondages ? Tes ajustements sur les candidats trouvés dans les sondages seront écrasés.")) return;
+      el.disabled = true;
+      try {
+        const res = await api("/api/jeu/admin/import-sondages", { method: "POST" });
+        S.tableau = res;
+        S.tableauFrais = true;
+        S.rapportImport = res.rapport;
+        invalider();
+        await chargerEtat(true);
+        notifier(pluriel(res.rapport.trouves.length, "intention de vote importée", "intentions de vote importées") + ". " + texteBilan(res.bilan));
+        vueAdmin("candidats");
+      } catch (err) {
+        el.disabled = false;
+        throw err;
+      }
+    },
+    "ouvrir-calendrier": (el) => {
+      const champ = el.dataset.champ;
+      if (S.calendrier && S.calendrier.champ === champ) { fermerCalendrier(); return; }
+      const ms = dms(S.edition && S.edition[champ]) || maintenant();
+      const d = new Date(ms);
+      S.calendrier = { champ: champ, annee: d.getFullYear(), mois: d.getMonth() };
+      dessinerCalendrier();
+    },
+    "cal-mois": (el) => {
+      const c = S.calendrier;
+      if (!c) return;
+      const d = new Date(c.annee, c.mois + Number(el.dataset.delta), 1);
+      c.annee = d.getFullYear();
+      c.mois = d.getMonth();
+      dessinerCalendrier();
+    },
+    "cal-jour": (el) => {
+      const c = S.calendrier;
+      if (!c) return;
+      const conteneur = app.querySelector('[data-champ-date="' + c.champ + '"]');
+      const champJour = conteneur.querySelector('[data-date="jour"]');
+      champJour.value = el.dataset.jour;
+      saisieDate(champJour, true);
+      fermerCalendrier();
+      const heure = conteneur.querySelector('[data-date="heure"]');
+      if (heure) heure.focus();
     },
     copier: async (el) => {
       const texte = el.dataset.texte;
@@ -1743,6 +2148,16 @@
       saisieDe(p)[el.dataset.champ] = el.value;
       majBarreAction(p);
     },
+    score: (el) => {
+      const p = pariCourant(el);
+      const s = saisieDe(p);
+      s.valeurs = s.valeurs || {};
+      if (el.value === "") delete s.valeurs[el.dataset.option];
+      else s.valeurs[el.dataset.option] = el.value;
+      const t = document.getElementById("total-scores");
+      if (t) t.textContent = texteTotalScores(p, s);
+      majBarreAction(p);
+    },
     "calc-pct": (el) => {
       const v = Number(el.value);
       document.getElementById("calc-sortie").innerHTML = nb(pointsProba(v)) + "<small>points à " + pctTxt(v) + "</small>";
@@ -1757,6 +2172,18 @@
       r.ordre[Number(el.dataset.i)] = el.value;
     },
     "res-valeur": (el) => { S.resolution[el.dataset.pari].valeur = el.value; },
+    "tab-num": () => majTotauxTableau(),
+    "res-score": (el) => {
+      const r = S.resolution[el.dataset.pari];
+      r.valeurs = r.valeurs || {};
+      if (el.value === "") delete r.valeurs[el.dataset.option];
+      else r.valeurs[el.dataset.option] = el.value;
+    },
+    "tab-filtre": (el) => {
+      const q = norm(el.value.trim());
+      S.filtreTableau = el.value;
+      app.querySelectorAll("[data-ligne-cand]").forEach((tr) => tr.classList.toggle("cache", !!q && norm(tr.dataset.nomCand).indexOf(q) < 0));
+    },
     "res-pct": (el) => {
       const r = S.resolution[el.dataset.pari];
       r.pourcentages = r.pourcentages || {};
@@ -1779,10 +2206,16 @@
     if (!ed) return false;
     if (el.dataset.ed) {
       const k = el.dataset.ed;
-      if (k === "ouverture" || k === "cloture") ed[k] = el.value ? new Date(el.value).toISOString() : "";
-      else ed[k] = el.value;
+      if (k === "lien") {
+        ed.config = configParDefaut(el.value ? LIENS[el.value][1] : ed.type, el.value);
+        if (el.value) ed.type = LIENS[el.value][1];
+        ed.options = [];
+        vueEditionPari(ed.cle);
+        return true;
+      }
+      ed[k] = el.value;
       if (k === "type") {
-        ed.config = ed.type === "estimation" ? { unite: "%", pente: 10, decimales: 1, min: 0, max: 100 } : ed.type === "classement" ? { places: 3, sens: "haut" } : {};
+        ed.config = configParDefaut(ed.type, "");
         vueEditionPari(ed.cle);
       }
       if (k === "coef") ed.options.forEach((o, i) => { const a = document.getElementById("apercu-" + i); if (a) a.textContent = apercuGain(ed, o.pct); });
@@ -1879,6 +2312,7 @@
     candidat: async (f) => {
       await api("/api/jeu/admin/candidat", { method: "POST", body: { nom: f.nom.value, parti: f.parti.value, statut: "declare" } });
       await chargerEtat(true);
+      S.tableau = null;
       notifier("Candidat ajouté.");
       vueAdmin("candidats");
     },
@@ -1906,19 +2340,33 @@
     }
   });
 
+  // En phase de capture, avant les actions : un clic hors du champ de date ferme le calendrier.
+  document.addEventListener("click", (ev) => {
+    if (S.calendrier && !ev.target.closest(".champ-date")) fermerCalendrier();
+  }, true);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && S.calendrier) {
+      const bouton = app.querySelector('[data-champ-date="' + S.calendrier.champ + '"] .bouton-calendrier');
+      fermerCalendrier();
+      if (bouton) bouton.focus();
+    }
+  });
+
   document.addEventListener("input", (ev) => {
     const el = ev.target;
     if (el.dataset && el.dataset.input && SAISIES[el.dataset.input]) {
       try { SAISIES[el.dataset.input](el); } catch (err) { notifier(err.message, true); }
       return;
     }
+    if (el.dataset && el.dataset.date) { saisieDate(el, false); return; }
     if (el.dataset && (el.dataset.ed || el.dataset.edcfg || el.dataset.edopt)) saisieEdition(el);
   });
 
   document.addEventListener("change", (ev) => {
     const el = ev.target;
     if (el.tagName === "SELECT" && el.dataset && el.dataset.input && SAISIES[el.dataset.input]) SAISIES[el.dataset.input](el);
-    if (el.dataset && (el.dataset.ed === "type" || el.dataset.ed === "phase" || el.dataset.ed === "statut" || el.dataset.edcfg)) saisieEdition(el);
+    if (el.dataset && (el.dataset.ed === "type" || el.dataset.ed === "lien" || el.dataset.ed === "phase" || el.dataset.ed === "statut" || el.dataset.edcfg)) saisieEdition(el);
+    if (el.dataset && el.dataset.date) saisieDate(el, true);
   });
 
   document.addEventListener("submit", async (ev) => {

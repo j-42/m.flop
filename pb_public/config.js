@@ -46,7 +46,7 @@ window.JEU = {
       nom: "Premier tour",
       debut: "2027-03-12T18:00",
       fin: "2027-04-18T20:00",
-      texte: "La liste officielle est connue. On parie sur le podium, le flop, le boulet et la participation.",
+      texte: "La liste officielle est connue. On parie sur le podium, le flop, le boulet, les scores, l’abstention et le vote blanc.",
     },
     {
       phase: "second_tour",

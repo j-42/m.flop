@@ -1,6 +1,6 @@
 # Monsieur Flop, politiques et manigances
 
-Jeu de pronostics entre amis sur la présidentielle 2027. Les joueurs parient sur les étapes de l’élection : parrainages, podium, flop 3, participation, vainqueur. Ils gagnent des points selon la probabilité de leurs réponses et montent en grade. Ils sont regroupés en guildes, s’affrontent en duels et décrochent des trophées. Il n’y a ni argent ni mise.
+Jeu de pronostics entre amis sur la présidentielle 2027. Les joueurs parient sur les étapes de l’élection : parrainages, podium, flop 3, scores, abstention, vote blanc, vainqueur. Ils gagnent des points selon la probabilité de leurs réponses et montent en grade. Ils sont regroupés en guildes, s’affrontent en duels et décrochent des trophées. Il n’y a ni argent ni mise.
 
 L’application tient dans un seul conteneur : PocketBase, qui gère le serveur web, la base SQLite, les comptes et le tableau de bord d’administration, plus le code du jeu.
 
@@ -83,7 +83,7 @@ git pull
 docker compose up -d --build
 ```
 
-Les données du volume sont conservées. La migration de la base ne s’exécute qu’une fois : elle ne réinitialise rien lors des mises à jour.
+Les données du volume sont conservées. Chaque migration de la base ne s’exécute qu’une fois : elle ne réinitialise rien lors des mises à jour.
 
 ### Sécurité
 
@@ -109,7 +109,7 @@ Côté application :
 |---|---|---|
 | Image d’accueil | `perso/affiche.jpg` | Après reconstruction de l’image |
 | Nom, sous-titre, grades, calendrier, sons par défaut | `pb_public/config.js` | Après reconstruction de l’image |
-| Guildes, candidats, paris, probabilités, résultats | Dans le jeu, Profil puis Administration | Immédiate |
+| Guildes, candidats, intentions de vote, paris, résultats | Dans le jeu, Profil puis Administration | Immédiate |
 
 Sans fichier `perso/affiche.jpg`, l’accueil s’affiche sans image.
 
@@ -117,9 +117,9 @@ Sans fichier `perso/affiche.jpg`, l’accueil s’affiche sans image.
 
 ### Avant d’inviter
 
-1. Dans **Profil**, puis **Administration**, onglet **Paris**, ouvrir chaque brouillon.
-2. Vérifier les dates, remplir une probabilité par réponse, cocher **Publié** et enregistrer. La publication est refusée tant qu’une probabilité manque, ou si les probabilités d’un pari à choix ne font pas environ 100 % (100 % par place pour un classement, à 5 points près). Dès qu’un joueur a parié, les probabilités et le coefficient sont figés : les vérifier avant d’ouvrir le pari.
-3. Les paris du 1er tour attendent la liste officielle du Conseil constitutionnel. Le moment venu, mettre à jour le statut des candidats dans l’onglet **Candidats**, puis utiliser **Ajouter les officiels seulement** dans chaque pari.
+1. Dans **Profil**, puis **Administration**, onglet **Candidats** : c’est le tableau unique du scrutin. Cliquer sur **Importer les intentions de vote**, ajuster les valeurs si besoin, remplir la cote des 500 signatures de chaque candidat, puis **Enregistrer le tableau**.
+2. Onglet **Paris**, ouvrir chaque brouillon. Les paris de départ sont reliés au tableau : leurs réponses et leurs cotes en viennent. Vérifier les dates, cocher **Publié** et enregistrer. Dès qu’un joueur a parié, les cotes et le coefficient sont figés : les vérifier avant d’ouvrir le pari.
+3. Un pari non relié se remplit à la main : une probabilité par réponse. La publication est alors refusée tant qu’une probabilité manque, ou si les probabilités d’un pari à choix ne font pas environ 100 % (100 % par place pour un classement, à 5 points près).
 4. Onglet **Invitations** : créer un code par personne, ou un code de groupe utilisable plusieurs fois. **Copier l’invitation** prépare un message avec le lien et le code.
 
 Dates retenues dans le catalogue, à confirmer par le décret de convocation des électeurs :
@@ -131,13 +131,23 @@ Dates retenues dans le catalogue, à confirmer par le décret de convocation des
 | 1er tour | 18 avril 2027, clôture à 20 h | Date annoncée |
 | 2nd tour | 2 mai 2027, clôture à 20 h | Date annoncée |
 
+### Le tableau des candidats
+
+Une ligne par candidat : statut, cote des 500 signatures, intentions de vote au 1er et au 2nd tour, scores réels des deux tours. Sous le tableau : vote blanc (en % des votants) et abstention (en % des inscrits) des deux tours.
+
+**Import des intentions de vote.** Le serveur du jeu lit le fichier `data/sondages.json` du dépôt public [2027etmoi/2027etmoi](https://github.com/2027etmoi/2027etmoi) (Licence ouverte), qui reprend les sondages du 1er tour déposés à la Commission des sondages sur environ sept semaines. Pour chaque candidat : moyenne des hypothèses de chaque sondage, puis moyenne des sondages. Les candidats sont rapprochés par leur nom ; le compte rendu liste ceux qui n’ont pas pu l’être. Le conteneur doit pouvoir joindre `raw.githubusercontent.com` en HTTPS. Les intentions du 2nd tour se saisissent à la main.
+
+**Cotes calculées.** Pour les paris du 1er tour (en tête, podium, flop 3, pire score), le jeu simule 10 000 fois le scrutin à partir des intentions de vote, avec un écart type de 0,5 + 0,12 × l’intention (environ 4 points pour un candidat à 30 %). Un candidat sans intention compte pour 0,5 %. Les cotes sont bornées entre 1 et 99 %. Pour l’élu, la cote vient de la part du premier finaliste dans les intentions du 2nd tour, avec un écart type de 3,5 points. Les candidats du 1er tour sont ceux au statut « Sur la liste officielle », ou à défaut les déclarés.
+
+**Paris reliés.** Dans l’éditeur d’un pari, le champ **Relié au tableau des candidats** choisit d’où viennent ses réponses, ses cotes et son résultat. Tant que personne n’a parié, les réponses et les cotes suivent le tableau à chaque enregistrement. Ensuite elles sont figées ; seuls de nouveaux noms peuvent encore être ajoutés à un oui/non ou à « Mon vote » ouvert. Les finalistes du 2nd tour sont les deux premiers des scores du 1er tour.
+
+**Résultats.** Trois cases dans le tableau : liste officielle publiée, résultats du 1er tour définitifs, résultats du 2nd tour définitifs. Une fois la case cochée et le tableau enregistré, les paris reliés et clos sont résolus et les points calculés. Le serveur refait cette vérification toutes les 10 minutes, pour les paris qui ferment après la saisie. Corriger un score ensuite recalcule les points.
+
 ### Pendant le jeu
 
-**Résultats** : un pari clos apparaît avec un bouton rouge **Résultat**. Saisir le résultat calcule les points de tout le monde. Une nouvelle saisie corrige et recalcule. **Annuler le résultat** remet les points de ce pari à zéro.
+**Résultats des paris non reliés** : un pari clos apparaît avec un bouton rouge **Résultat**. Saisir le résultat calcule les points de tout le monde. Une nouvelle saisie corrige et recalcule. **Annuler le résultat** remet les points de ce pari à zéro.
 
-**Mon vote** : à la saisie du résultat, les pourcentages officiels peuvent être renseignés. Au 1er tour, ils servent au trophée du Grand Déçu.
-
-**2nd tour** : après le 1er tour, ajouter les deux finalistes aux paris « Qui sera élu ? » et « Mon vote au 2nd tour », remplir les probabilités et publier.
+**2nd tour** : saisir les scores du 1er tour et les intentions de vote du 2nd tour pour les deux finalistes, enregistrer le tableau, puis publier « Qui sera élu ? », « Mon vote au 2nd tour » et les paris du 2nd tour.
 
 **Mot de passe oublié** : dans le tableau de bord `/_/`, collection `users`, ouvrir le joueur et saisir un nouveau mot de passe.
 
@@ -150,7 +160,7 @@ Les règles complètes, côté joueur, sont dans la page **Règles** de l’appl
 ```
 Dockerfile            Image : PocketBase vérifié + code du jeu
 docker-compose.yml    Service, volume de données, durcissement
-pb_migrations/        Création de la base au premier démarrage
+pb_migrations/        Création de la base, puis évolutions (tableau des candidats)
 pb_hooks/             Règles du jeu côté serveur (points, secret, duels, trophées, admin)
 pb_public/            Interface web (HTML, CSS, JavaScript sans compilation)
 perso/                Image d’accueil
@@ -163,7 +173,9 @@ perso/                Image d’accueil
 | Le conteneur n’est pas `healthy` | `docker compose logs monsieur-flop` |
 | « Trop de tentatives » pour tout le monde | En-tête de proxy de confiance non renseigné, voir Mise en ligne |
 | Un pari n’apparaît pas aux joueurs | Brouillon, ou date d’ouverture pas encore passée |
-| Publication refusée | Une probabilité manque, leur total s’écarte trop de 100 %, ou pas assez de réponses |
+| Publication refusée | Une probabilité manque, leur total s’écarte trop de 100 %, ou pas assez de réponses. Pour un pari relié : une cote manque dans le tableau |
+| Import des sondages impossible | Le conteneur n’a pas accès à `raw.githubusercontent.com` |
+| Pari relié sans réponses | Enregistrer le tableau ; pour le 2nd tour, saisir d’abord les scores du 1er tour |
 | Modification refusée | Des joueurs ont déjà parié : probabilités, coefficient et barème sont figés |
 | Saisie du résultat refusée | Le pari n’est pas encore clos |
 | Architecture non prise en charge au build | Construire pour `linux/amd64`, `linux/arm64` ou `linux/arm/v7` |

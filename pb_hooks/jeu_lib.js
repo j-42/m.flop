@@ -1,16 +1,13 @@
 // Monsieur Flop : logique du jeu, partagée par toutes les routes de main.pb.js.
 // Toutes les règles de calcul des points sont ici, et sont décrites dans la page « Règles » de l'application.
 
-const TYPES = ["choix", "oui_non", "classement", "estimation", "vote"];
+const TYPES = ["choix", "oui_non", "classement", "estimation", "vote", "scores"];
 const PHASES = ["campagne", "parrainages", "premier_tour", "second_tour"];
 const STATUTS_CANDIDAT = ["declare", "officiel", "non_retenu", "retire"];
 
 // Une réponse rapporte au plus ce nombre de points (avant coefficient) : au-delà, le classement
 // se jouerait à la loterie sur les outsiders à 1 ou 2 %. Le plafond s'applique sous 3,4 % environ.
 const PLAFOND_POINTS = 300;
-// Sur un pari oui ou non, un joueur répond pour ce nombre de noms au plus. Une mauvaise réponse
-// ne coûtant rien, il serait sinon toujours gagnant de répondre pour toute la liste.
-const MAX_OUI_NON = 10;
 // Écart toléré, en points de pourcentage, entre la somme des probabilités et 100 % (par place pour un classement).
 const TOLERANCE_SOMME = 5;
 
@@ -158,6 +155,22 @@ function pointsBruts(pari, reponse, resultat) {
     const pente = Number(pari.config.pente) || 10;
     const ecart = Math.abs(Number(reponse.valeur) - Number(resultat.valeur));
     if (isFinite(ecart)) brut = Math.max(0, Math.round(100 - pente * ecart));
+  } else if (pari.type === "scores") {
+    // Moyenne, candidat par candidat, de « 100 moins la pente par point d'écart » : au plus 100 points.
+    const pente = Number(pari.config.pente) || 10;
+    const reels = resultat.valeurs || {};
+    const donnes = reponse.valeurs || {};
+    let total = 0;
+    let n = 0;
+    options.forEach((o) => {
+      const reel = Number(reels[o.id]);
+      if (reels[o.id] === undefined || reels[o.id] === null || !isFinite(reel)) return;
+      n++;
+      const v = Number(donnes[o.id]);
+      if (donnes[o.id] === undefined || donnes[o.id] === null || !isFinite(v)) return;
+      total += Math.max(0, 100 - pente * Math.abs(v - reel));
+    });
+    brut = n ? Math.round(total / n) : 0;
   }
   return brut;
 }
@@ -187,7 +200,6 @@ function normaliserReponse(pari, r) {
       }
     });
     if (!n) throw erreur("Réponds oui ou non pour au moins un nom.");
-    if (n > MAX_OUI_NON) throw erreur("Tu peux répondre pour " + MAX_OUI_NON + " noms au plus : garde ceux dont tu es le plus sûr.");
     return { reponses: sortie };
   }
   if (pari.type === "classement") {
@@ -209,6 +221,19 @@ function normaliserReponse(pari, r) {
     if (cfg.min !== undefined && cfg.min !== null && v < Number(cfg.min)) throw erreur("Le nombre doit être au moins " + cfg.min + ".");
     if (cfg.max !== undefined && cfg.max !== null && v > Number(cfg.max)) throw erreur("Le nombre doit être au plus " + cfg.max + ".");
     return { valeur: arrondir(v, Number(cfg.decimales) || 0) };
+  }
+  if (pari.type === "scores") {
+    const valeurs = {};
+    const src = r.valeurs || {};
+    (pari.options || []).forEach((o) => {
+      const brut = src[o.id];
+      const v = Number(String(brut).replace(",", "."));
+      if (brut === "" || brut === null || brut === undefined || !isFinite(v)) throw erreur("Donne un score pour « " + o.label + " ».");
+      if (v < 0 || v > 100) throw erreur("Le score de « " + o.label + " » doit être entre 0 et 100 %.");
+      valeurs[o.id] = arrondir(v, 1);
+    });
+    if (!Object.keys(valeurs).length) throw erreur("Il n'y a aucun nom dans ce pari.");
+    return { valeurs: valeurs };
   }
   if (pari.type === "vote") {
     const sortie = {};
@@ -248,6 +273,16 @@ function normaliserResultat(pari, r) {
     const v = Number(String(r.valeur).replace(",", "."));
     if (r.valeur === "" || r.valeur === null || r.valeur === undefined || !isFinite(v)) throw erreur("Indique la valeur réelle.");
     return { valeur: v };
+  }
+  if (pari.type === "scores") {
+    const valeurs = {};
+    const src = r.valeurs || {};
+    (pari.options || []).forEach((o) => {
+      const v = Number(String(src[o.id]).replace(",", "."));
+      if (src[o.id] === "" || src[o.id] === null || src[o.id] === undefined || !isFinite(v)) throw erreur("Indique le score réel de « " + o.label + " ».");
+      valeurs[o.id] = v;
+    });
+    return { valeurs: valeurs };
   }
   if (pari.type === "vote") {
     const pourcentages = {};
@@ -292,7 +327,7 @@ function normaliserPari(b) {
         pct = Number(String(o.pct).replace(",", "."));
         if (!isFinite(pct) || pct < 1 || pct > 99) throw erreur("La probabilité de « " + label + " » doit être entre 1 et 99 %.");
       }
-      options.push({ id: id, label: label, pct: pct });
+      options.push({ id: id, label: label, pct: b.type === "scores" || b.type === "vote" ? null : pct });
     });
   }
 
@@ -310,20 +345,39 @@ function normaliserPari(b) {
     config.places = Math.max(1, Math.min(5, parseInt(cfg.places || 3, 10) || 3));
     config.sens = cfg.sens === "bas" ? "bas" : "haut";
   }
+  if (b.type === "scores") {
+    config.unite = "%";
+    config.pente = Number(String(cfg.pente || 10).replace(",", "."));
+    if (!isFinite(config.pente) || config.pente <= 0) throw erreur("Les points perdus par point d'écart doivent être positifs.");
+  }
+  // Pari relié au tableau des candidats : ses réponses, ses cotes et son résultat en viennent.
+  if (cfg.lien) {
+    const lien = LIENS[cfg.lien];
+    if (!lien) throw erreur("Lien inconnu avec le tableau des candidats.");
+    if (lien.type !== b.type) throw erreur("« " + lien.nom + " » demande un pari de type " + NOMS_TYPES[lien.type] + ".");
+    config.lien = cfg.lien;
+  }
 
   if (statut === "publie") {
     if (b.type === "choix" && options.length < 2) throw erreur("Un pari à choix doit proposer au moins deux réponses.");
     if (b.type === "oui_non" && options.length < 1) throw erreur("Ajoute au moins un nom.");
     if (b.type === "classement" && options.length < config.places) throw erreur("Il faut au moins " + config.places + " noms pour ce classement.");
     if (b.type === "vote" && options.length < 1) throw erreur("Ajoute au moins une réponse possible.");
+    if (b.type === "scores" && options.length < 1) throw erreur("Ajoute au moins un nom.");
     if (b.type === "choix" || b.type === "oui_non" || b.type === "classement") {
       options.forEach((o) => {
-        if (o.pct === null) throw erreur("Indique la probabilité de « " + o.label + " » avant de publier.");
+        if (o.pct === null) {
+          throw erreur(config.lien
+            ? "« " + o.label + " » n'a pas de cote : complète le tableau des candidats avant de publier."
+            : "Indique la probabilité de « " + o.label + " » avant de publier.");
+        }
       });
     }
     // Une seule réponse est juste : les probabilités doivent faire 100 %. Pour un classement, chaque place
     // est occupée par un nom : elles font 100 % par place. Sinon les gains affichés seraient faux.
-    if (b.type === "choix" || b.type === "classement") {
+    // Les cotes d'un pari relié sont calculées par le jeu : leur somme peut dépasser 100 % de quelques points,
+    // parce qu'aucune cote ne descend sous 1 %.
+    if ((b.type === "choix" || b.type === "classement") && !config.lien) {
       const attendu = b.type === "choix" ? 100 : 100 * config.places;
       const tolerance = b.type === "choix" ? TOLERANCE_SOMME : TOLERANCE_SOMME * config.places;
       const somme = Math.round(options.reduce((s, o) => s + Number(o.pct), 0) * 10) / 10;
@@ -357,6 +411,7 @@ function idsDeReponse(pari, r) {
   if (pari.type === "oui_non") return Object.keys(r.reponses || {});
   if (pari.type === "classement") return (r.ordre || []).slice();
   if (pari.type === "vote") return [r.vais, r.voudrais].filter(Boolean);
+  if (pari.type === "scores") return Object.keys(r.valeurs || {});
   return [];
 }
 
@@ -390,7 +445,7 @@ function verifierModifPari(actuel, nouveau, pronos, maintenant) {
   if (Math.abs(Number(nouveau.coef) - Number(actuel.coef)) > 1e-9) throw erreur(deja + "le coefficient ne peut plus changer.");
   const cfgA = actuel.config || {};
   const cfgN = nouveau.config || {};
-  ["pente", "places", "sens"].forEach((k) => {
+  ["pente", "places", "sens", "lien"].forEach((k) => {
     if (cfgA[k] === undefined && cfgN[k] === undefined) return;
     if (String(cfgA[k]) !== String(cfgN[k])) throw erreur(deja + "le barème ne peut plus changer.");
   });
@@ -458,6 +513,18 @@ function statistiques(pari, pronos) {
       const m = Math.floor(valeurs.length / 2);
       stats.mediane = valeurs.length % 2 ? valeurs[m] : arrondir((valeurs[m - 1] + valeurs[m]) / 2, 2);
     }
+  } else if (pari.type === "scores") {
+    const sommes = {};
+    const nbs = {};
+    pronos.forEach((p) => {
+      const v = (p.reponse && p.reponse.valeurs) || {};
+      Object.keys(v).forEach((id) => {
+        sommes[id] = (sommes[id] || 0) + Number(v[id]);
+        nbs[id] = (nbs[id] || 0) + 1;
+      });
+    });
+    stats.moyennes = {};
+    Object.keys(sommes).forEach((id) => { stats.moyennes[id] = arrondir(sommes[id] / nbs[id], 1); });
   } else if (pari.type === "vote") {
     stats.vais = {};
     stats.voudrais = {};
@@ -687,7 +754,7 @@ function calculerTrophees(joueurs, listeJoueurs, paris, parisParId, pronos, bila
     }
     if (plusRare !== null && (visionnaire[j] === undefined || plusRare < visionnaire[j])) visionnaire[j] = plusRare;
 
-    if (p.type === "estimation") sniper[j] = (sniper[j] || 0) + pr.points;
+    if (p.type === "estimation" || p.type === "scores") sniper[j] = (sniper[j] || 0) + pr.points;
 
     // Grand Déçu : le candidat souhaité au 1er tour qui a fait le plus petit score.
     if (p.type === "vote" && p.phase === "premier_tour" && pr.reponse.voudrais) {
@@ -711,7 +778,7 @@ function calculerTrophees(joueurs, listeJoueurs, paris, parisParId, pronos, bila
     meilleurs(decu, joueursParId, "min"), (v) => String(v).replace(".", ",") + " % pour son candidat de cœur");
   ajouter("visionnaire", "Le Visionnaire", "A trouvé la bonne réponse la moins probable.",
     meilleurs(visionnaire, joueursParId, "min"), (v) => "bonne réponse donnée à " + v + " %");
-  ajouter("sniper", "Le Sniper", "Le plus de points sur les paris d’estimation.",
+  ajouter("sniper", "Le Sniper", "Le plus de points sur les paris d’estimation et de scores.",
     meilleurs(sniper, joueursParId, "max", 1), (v) => pluriel(v, "point"));
   ajouter("duelliste", "Le Duelliste", "Le plus de duels gagnés.",
     meilleurs(Object.keys(bilanDuels).reduce((o, id) => { o[id] = bilanDuels[id].gagnes; return o; }, {}), joueursParId, "max", 1),
@@ -725,6 +792,542 @@ function calculerTrophees(joueurs, listeJoueurs, paris, parisParId, pronos, bila
   ajouter("retardataire", "Le Retardataire", "Le plus de paris posés dans la dernière heure avant la clôture.",
     meilleurs(retardataire, joueursParId, "max", 1), (v) => pluriel(v, "pari"));
   return t;
+}
+
+// ---------- Tableau des candidats : cotes calculées, paris reliés, résultats déduits ----------
+//
+// L'admin tient un seul tableau : pour chaque candidat, son statut, sa cote pour les 500 signatures,
+// ses intentions de vote aux deux tours, puis ses scores réels. Plus le vote blanc et l'abstention réels.
+// Les paris « reliés » (config.lien) en tirent leurs réponses, leurs cotes et leur résultat.
+
+const NOMS_TYPES = { choix: "Un seul choix", oui_non: "Oui ou non", classement: "Classement", estimation: "Estimation", vote: "Mon vote", scores: "Scores" };
+const BLANC = { id: "x_blanc", label: "Vote blanc" };
+const ABSTENTION = { id: "x_abstention", label: "Abstention" };
+
+// Écart type de l'erreur des sondages, en points, selon l'intention de vote : environ 4 points
+// pour un candidat à 30 %, 1 point pour un candidat à 4 %.
+function ecartTypeSondage(intention) {
+  return 0.5 + 0.12 * intention;
+}
+const TIRAGES = 10000;
+// Écart type, en points, de la part du premier finaliste au 2nd tour.
+const ECART_TYPE_T2 = 3.5;
+
+function nombreOuNull(v) {
+  if (v === "" || v === null || v === undefined) return null;
+  const n = Number(String(v).replace(",", "."));
+  return isFinite(n) ? n : null;
+}
+
+// Générateur pseudo-aléatoire à graine fixe : les mêmes intentions donnent toujours les mêmes cotes.
+function generateur(graine) {
+  let a = graine >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Ramène des probabilités entre 1 et 99 % en gardant leur somme égale à la cible (100, ou 300 pour 3 places).
+function ajusterSomme(valeurs, cible) {
+  const ids = Object.keys(valeurs);
+  const v = {};
+  ids.forEach((id) => { v[id] = Math.max(0, Number(valeurs[id]) || 0); });
+  const fixe = {};
+  for (let tour = 0; tour < 30; tour++) {
+    let sommeFixe = 0;
+    let sommeLibre = 0;
+    const libres = ids.filter((id) => !fixe[id]);
+    ids.forEach((id) => { if (fixe[id]) sommeFixe += v[id]; else sommeLibre += v[id]; });
+    if (!libres.length) break;
+    const reste = cible - sommeFixe;
+    libres.forEach((id) => { v[id] = sommeLibre > 0 ? (v[id] * reste) / sommeLibre : reste / libres.length; });
+    let change = false;
+    libres.forEach((id) => {
+      if (v[id] < 1) { v[id] = 1; fixe[id] = true; change = true; }
+      else if (v[id] > 99) { v[id] = 99; fixe[id] = true; change = true; }
+    });
+    if (!change) break;
+  }
+  const sortie = {};
+  ids.forEach((id) => { sortie[id] = arrondir(Math.min(99, Math.max(1, v[id])), 1); });
+  return sortie;
+}
+
+// Simulation du 1er tour à partir des intentions de vote. Renvoie, pour chaque candidat, ses chances
+// d'arriver en tête, d'être qualifié, d'être sur le podium, dans le flop 3, et d'être dernier.
+function cotesPremierTour(liste) {
+  const n = liste.length;
+  const vide = { premier: {}, qualifie: {}, podium: {}, flop: {}, dernier: {} };
+  if (!n) return vide;
+  const mu = liste.map((c) => { const x = nombreOuNull(c.intention); return x === null ? 0.5 : Math.max(0, x); });
+  const sigma = mu.map(ecartTypeSondage);
+  const compte = { premier: new Array(n).fill(0), qualifie: new Array(n).fill(0), podium: new Array(n).fill(0), flop: new Array(n).fill(0), dernier: new Array(n).fill(0) };
+  const alea = generateur(2027);
+  const scores = new Array(n);
+  const ordre = new Array(n);
+  for (let t = 0; t < TIRAGES; t++) {
+    for (let i = 0; i < n; i++) {
+      // Loi normale par la méthode de Box-Muller.
+      const u = 1 - alea();
+      const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * alea());
+      scores[i] = Math.max(0, mu[i] + sigma[i] * z) + alea() * 1e-6;
+      ordre[i] = i;
+    }
+    ordre.sort((a, b) => scores[b] - scores[a]);
+    compte.premier[ordre[0]]++;
+    for (let k = 0; k < Math.min(2, n); k++) compte.qualifie[ordre[k]]++;
+    for (let k = 0; k < Math.min(3, n); k++) compte.podium[ordre[k]]++;
+    for (let k = Math.max(0, n - 3); k < n; k++) compte.flop[ordre[k]]++;
+    compte.dernier[ordre[n - 1]]++;
+  }
+  const cibles = { premier: 100, qualifie: 100 * Math.min(2, n), podium: 100 * Math.min(3, n), flop: 100 * Math.min(3, n), dernier: 100 };
+  const sortie = {};
+  Object.keys(compte).forEach((k) => {
+    const brut = {};
+    liste.forEach((c, i) => { brut[c.id] = (100 * compte[k][i]) / TIRAGES; });
+    sortie[k] = ajusterSomme(brut, cibles[k]);
+  });
+  return sortie;
+}
+
+// Fonction de répartition de la loi normale (approximation d'Abramowitz et Stegun).
+function repartitionNormale(x) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const d = 0.3989423 * Math.exp((-x * x) / 2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return x > 0 ? 1 - p : p;
+}
+
+// Chances de gagner le 2nd tour, d'après les intentions de vote des deux finalistes.
+function cotesSecondTour(a, b) {
+  const ia = nombreOuNull(a.intention_t2);
+  const ib = nombreOuNull(b.intention_t2);
+  if (ia === null || ib === null || ia + ib <= 0) return null;
+  const part = (100 * ia) / (ia + ib);
+  const pa = arrondir(Math.min(99, Math.max(1, 100 * repartitionNormale((part - 50) / ECART_TYPE_T2))), 1);
+  const sortie = {};
+  sortie[a.id] = pa;
+  sortie[b.id] = arrondir(100 - pa, 1);
+  return sortie;
+}
+
+function scrutinParDefaut() {
+  return {
+    liste_officielle: false, resultats_t1: false, resultats_t2: false,
+    t1: { abstention: null, blanc: null }, t2: { abstention: null, blanc: null },
+    sondage: null,
+  };
+}
+
+function lireScrutin(app) {
+  let rec = null;
+  try { rec = app.findFirstRecordByFilter("reglages", "cle = 'scrutin'"); } catch (err) { rec = null; }
+  const s = Object.assign(scrutinParDefaut(), rec ? lireJSON(rec, "valeur", {}) || {} : {});
+  s.t1 = Object.assign({ abstention: null, blanc: null }, s.t1 || {});
+  s.t2 = Object.assign({ abstention: null, blanc: null }, s.t2 || {});
+  return s;
+}
+
+function ecrireScrutin(app, s) {
+  let rec = null;
+  try { rec = app.findFirstRecordByFilter("reglages", "cle = 'scrutin'"); } catch (err) { rec = null; }
+  if (!rec) {
+    rec = new Record(app.findCollectionByNameOrId("reglages"));
+    rec.set("cle", "scrutin");
+  }
+  rec.set("valeur", s);
+  app.save(rec);
+}
+
+function donneesCandidat(rec) {
+  const d = lireJSON(rec, "donnees", {}) || {};
+  return {
+    cote_parrainages: nombreOuNull(d.cote_parrainages),
+    intention_t1: nombreOuNull(d.intention_t1),
+    intention_t2: nombreOuNull(d.intention_t2),
+    score_t1: nombreOuNull(d.score_t1),
+    score_t2: nombreOuNull(d.score_t2),
+  };
+}
+
+// Tout ce qu'il faut pour relier les paris au tableau. Les cotes sont calculées à la demande.
+function contexteTableau(app) {
+  const candidats = app.findRecordsByFilter("candidats", "id != ''", "nom", 0, 0).map((r) =>
+    Object.assign({ id: r.id, nom: r.getString("nom"), parti: r.getString("parti"), statut: r.getString("statut") }, donneesCandidat(r)));
+  const scrutin = lireScrutin(app);
+  const ctx = { candidats: candidats, scrutin: scrutin, _cache: {} };
+  return ctx;
+}
+
+// Les candidats du 1er tour : ceux de la liste officielle dès qu'il y en a, sinon les déclarés.
+function candidatsPremierTour(ctx) {
+  const officiels = ctx.candidats.filter((c) => c.statut === "officiel");
+  if (officiels.length || ctx.scrutin.liste_officielle) return officiels;
+  return ctx.candidats.filter((c) => c.statut === "declare");
+}
+
+// Classement réel du 1er tour : les candidats qui ont un score, du plus haut au plus bas.
+function classementReel(liste, champ) {
+  return liste.filter((c) => c[champ] !== null).slice().sort((a, b) => b[champ] - a[champ]);
+}
+
+function finalistes(ctx) {
+  const ordre = classementReel(candidatsPremierTour(ctx), "score_t1");
+  return ordre.length >= 2 ? ordre.slice(0, 2) : [];
+}
+
+function cotesT1(ctx) {
+  if (!ctx._cache.t1) ctx._cache.t1 = cotesPremierTour(candidatsPremierTour(ctx).map((c) => ({ id: c.id, intention: c.intention_t1 })));
+  return ctx._cache.t1;
+}
+
+function optionsCandidats(liste, cotes) {
+  return liste.map((c) => ({ id: c.id, label: c.nom, pct: cotes ? (cotes[c.id] === undefined ? null : cotes[c.id]) : null }));
+}
+
+function valeursScores(liste, champ) {
+  const v = {};
+  for (let i = 0; i < liste.length; i++) {
+    if (liste[i][champ] === null) return null;
+    v[liste[i].id] = liste[i][champ];
+  }
+  return liste.length ? v : null;
+}
+
+function pourcentagesVote(liste, champ, tour) {
+  const p = {};
+  liste.forEach((c) => { if (c[champ] !== null) p[c.id] = c[champ]; });
+  if (tour.blanc !== null && tour.blanc !== undefined) p[BLANC.id] = tour.blanc;
+  if (tour.abstention !== null && tour.abstention !== undefined) p[ABSTENTION.id] = tour.abstention;
+  return p;
+}
+
+function valeurTour(ctx, tour, champ, drapeau) {
+  if (!ctx.scrutin[drapeau]) return null;
+  const v = nombreOuNull(ctx.scrutin[tour][champ]);
+  return v === null ? null : { valeur: v };
+}
+
+// options(ctx) : les réponses possibles, avec leur cote (null si le lien ne fixe pas les réponses).
+// resultat(ctx, pari) : le résultat officiel, ou null tant qu'il n'est pas connu.
+const LIENS = {
+  parrainages: {
+    nom: "Les 500 signatures", type: "oui_non",
+    options: (ctx) => ctx.candidats.filter((c) => c.statut === "declare" || c.statut === "officiel" || c.statut === "non_retenu")
+      .map((c) => ({ id: c.id, label: c.nom, pct: c.cote_parrainages })),
+    resultat: (ctx) => ctx.scrutin.liste_officielle ? { oui: ctx.candidats.filter((c) => c.statut === "officiel").map((c) => c.id) } : null,
+  },
+  nb_officiels: {
+    nom: "Le nombre de candidats officiels", type: "estimation", options: null,
+    resultat: (ctx) => ctx.scrutin.liste_officielle ? { valeur: ctx.candidats.filter((c) => c.statut === "officiel").length } : null,
+  },
+  podium_t1: {
+    nom: "Le podium du 1er tour", type: "classement",
+    options: (ctx) => optionsCandidats(candidatsPremierTour(ctx), cotesT1(ctx).podium),
+    resultat: (ctx, p) => {
+      if (!ctx.scrutin.resultats_t1) return null;
+      const ids = (p.options || []).map((o) => o.id);
+      const ordre = classementReel(ctx.candidats.filter((c) => ids.indexOf(c.id) >= 0), "score_t1");
+      const places = Number(p.config.places) || 3;
+      return ordre.length >= places ? { ordre: ordre.slice(0, places).map((c) => c.id) } : null;
+    },
+  },
+  flop_t1: {
+    nom: "Le flop 3 du 1er tour", type: "classement",
+    options: (ctx) => optionsCandidats(candidatsPremierTour(ctx), cotesT1(ctx).flop),
+    resultat: (ctx, p) => {
+      if (!ctx.scrutin.resultats_t1) return null;
+      const ids = (p.options || []).map((o) => o.id);
+      const ordre = classementReel(ctx.candidats.filter((c) => ids.indexOf(c.id) >= 0), "score_t1").reverse();
+      const places = Number(p.config.places) || 3;
+      return ordre.length >= places ? { ordre: ordre.slice(0, places).map((c) => c.id) } : null;
+    },
+  },
+  boulet_t1: {
+    nom: "Le pire score du 1er tour", type: "choix",
+    options: (ctx) => optionsCandidats(candidatsPremierTour(ctx), cotesT1(ctx).dernier),
+    resultat: (ctx, p) => {
+      if (!ctx.scrutin.resultats_t1) return null;
+      const ids = (p.options || []).map((o) => o.id);
+      const ordre = classementReel(ctx.candidats.filter((c) => ids.indexOf(c.id) >= 0), "score_t1");
+      return ordre.length ? { option: ordre[ordre.length - 1].id } : null;
+    },
+  },
+  en_tete_t1: {
+    nom: "Le premier du 1er tour", type: "choix",
+    options: (ctx) => optionsCandidats(candidatsPremierTour(ctx), cotesT1(ctx).premier),
+    resultat: (ctx, p) => {
+      if (!ctx.scrutin.resultats_t1) return null;
+      const ids = (p.options || []).map((o) => o.id);
+      const ordre = classementReel(ctx.candidats.filter((c) => ids.indexOf(c.id) >= 0), "score_t1");
+      return ordre.length ? { option: ordre[0].id } : null;
+    },
+  },
+  scores_t1: {
+    nom: "Les scores du 1er tour", type: "scores",
+    options: (ctx) => optionsCandidats(candidatsPremierTour(ctx), null),
+    resultat: (ctx, p) => {
+      if (!ctx.scrutin.resultats_t1) return null;
+      const ids = (p.options || []).map((o) => o.id);
+      const v = valeursScores(ctx.candidats.filter((c) => ids.indexOf(c.id) >= 0), "score_t1");
+      return v ? { valeurs: v } : null;
+    },
+  },
+  abstention_t1: { nom: "L’abstention au 1er tour", type: "estimation", options: null, resultat: (ctx) => valeurTour(ctx, "t1", "abstention", "resultats_t1") },
+  participation_t1: {
+    nom: "La participation au 1er tour", type: "estimation", options: null,
+    resultat: (ctx) => { const v = valeurTour(ctx, "t1", "abstention", "resultats_t1"); return v ? { valeur: arrondir(100 - v.valeur, 2) } : null; },
+  },
+  blanc_t1: { nom: "Le vote blanc au 1er tour", type: "estimation", options: null, resultat: (ctx) => valeurTour(ctx, "t1", "blanc", "resultats_t1") },
+  vote_t1: {
+    nom: "Mon vote au 1er tour", type: "vote",
+    options: (ctx) => optionsCandidats(candidatsPremierTour(ctx), null).concat([{ id: BLANC.id, label: BLANC.label, pct: null }, { id: ABSTENTION.id, label: ABSTENTION.label, pct: null }]),
+    resultat: (ctx) => ctx.scrutin.resultats_t1 ? { pourcentages: pourcentagesVote(candidatsPremierTour(ctx), "score_t1", ctx.scrutin.t1) } : null,
+  },
+  elu: {
+    nom: "L’élu au 2nd tour", type: "choix",
+    options: (ctx) => {
+      const f = finalistes(ctx);
+      return optionsCandidats(f, f.length === 2 ? cotesSecondTour(f[0], f[1]) : null);
+    },
+    resultat: (ctx, p) => {
+      if (!ctx.scrutin.resultats_t2) return null;
+      const ids = (p.options || []).map((o) => o.id);
+      const ordre = classementReel(ctx.candidats.filter((c) => ids.indexOf(c.id) >= 0), "score_t2");
+      return ordre.length ? { option: ordre[0].id } : null;
+    },
+  },
+  score_vainqueur_t2: {
+    nom: "Le score de l’élu", type: "estimation", options: null,
+    resultat: (ctx) => {
+      if (!ctx.scrutin.resultats_t2) return null;
+      const ordre = classementReel(finalistes(ctx), "score_t2");
+      return ordre.length ? { valeur: ordre[0].score_t2 } : null;
+    },
+  },
+  scores_t2: {
+    nom: "Les scores du 2nd tour", type: "scores",
+    options: (ctx) => optionsCandidats(finalistes(ctx), null),
+    resultat: (ctx, p) => {
+      if (!ctx.scrutin.resultats_t2) return null;
+      const ids = (p.options || []).map((o) => o.id);
+      const v = valeursScores(ctx.candidats.filter((c) => ids.indexOf(c.id) >= 0), "score_t2");
+      return v ? { valeurs: v } : null;
+    },
+  },
+  abstention_t2: { nom: "L’abstention au 2nd tour", type: "estimation", options: null, resultat: (ctx) => valeurTour(ctx, "t2", "abstention", "resultats_t2") },
+  blanc_t2: { nom: "Le vote blanc au 2nd tour", type: "estimation", options: null, resultat: (ctx) => valeurTour(ctx, "t2", "blanc", "resultats_t2") },
+  vote_t2: {
+    nom: "Mon vote au 2nd tour", type: "vote",
+    options: (ctx) => optionsCandidats(finalistes(ctx), null).concat([{ id: BLANC.id, label: BLANC.label, pct: null }, { id: ABSTENTION.id, label: ABSTENTION.label, pct: null }]),
+    resultat: (ctx) => ctx.scrutin.resultats_t2 ? { pourcentages: pourcentagesVote(finalistes(ctx), "score_t2", ctx.scrutin.t2) } : null,
+  },
+};
+
+// Les réponses d'un pari relié, d'après le tableau. Sans pronos, la liste et les cotes suivent le tableau.
+// Avec des pronos, rien ne change, sauf sur un oui/non ou « Mon vote » encore ouvert : on peut y ajouter des noms.
+function optionsReliees(pari, ctx, nbPronos, maintenant) {
+  const lien = LIENS[(pari.config || {}).lien];
+  if (!lien || !lien.options) return null;
+  const cible = lien.options(ctx);
+  if (!nbPronos) return cible;
+  const clos = maintenant >= dateMs(pari.cloture);
+  if (clos || (pari.type !== "oui_non" && pari.type !== "vote")) return pari.options;
+  const deja = {};
+  (pari.options || []).forEach((o) => { deja[o.id] = true; });
+  const ajouts = cible.filter((o) => !deja[o.id] && (pari.type === "vote" || o.pct !== null));
+  return (pari.options || []).concat(ajouts);
+}
+
+// Met à jour les réponses de tous les paris reliés, puis résout ceux dont le résultat est connu.
+// resolutionSeule : sans recalcul des réponses ni des cotes (tâche planifiée, plus légère).
+function synchroniserParis(app, resolutionSeule) {
+  const ctx = contexteTableau(app);
+  const maintenant = Date.now();
+  const bilan = { majs: 0, resolus: 0, corriges: 0 };
+  app.findRecordsByFilter("paris", "id != ''", "", 0, 0).forEach((rec) => {
+    const p = pariDepuisRecord(rec);
+    const lien = LIENS[(p.config || {}).lien];
+    if (!lien || lien.type !== p.type) return;
+    const nbPronos = app.countRecords("pronos", $dbx.exp("pari = {:p}", { p: p.id }));
+    let change = false;
+    if (p.statut !== "resolu" && !resolutionSeule) {
+      const options = optionsReliees(p, ctx, nbPronos, maintenant);
+      if (options && stable(options) !== stable(p.options)) {
+        rec.set("options", options);
+        p.options = options;
+        change = true;
+        bilan.majs++;
+      }
+    }
+    // Résolution : seulement pour un pari publié et clos.
+    let res = null;
+    if (p.statut !== "brouillon" && maintenant >= dateMs(p.cloture)) {
+      try {
+        const brut = lien.resultat(ctx, p);
+        res = brut ? normaliserResultat(p, brut) : null;
+      } catch (err) {
+        res = null;
+      }
+    }
+    if (res && (p.statut !== "resolu" || stable(res) !== stable(p.resultat))) {
+      if (p.statut === "resolu") bilan.corriges++;
+      else bilan.resolus++;
+      rec.set("resultat", res);
+      rec.set("statut", "resolu");
+      if (!rec.getString("resolu_le")) rec.set("resolu_le", new Date().toISOString());
+      app.runInTransaction((tx) => {
+        tx.save(rec);
+        recalculerPoints(tx, rec);
+      });
+      return;
+    }
+    if (change) app.save(rec);
+  });
+  return bilan;
+}
+
+// Cotes calculées, pour l'affichage dans l'administration.
+function cotesAffichees(ctx) {
+  const t1 = cotesT1(ctx);
+  const f = finalistes(ctx);
+  return {
+    premier: t1.premier, podium: t1.podium, flop: t1.flop, dernier: t1.dernier, qualifie: t1.qualifie,
+    elu: f.length === 2 ? cotesSecondTour(f[0], f[1]) || {} : {},
+    candidatsT1: candidatsPremierTour(ctx).map((c) => c.id),
+    finalistes: f.map((c) => c.id),
+  };
+}
+
+// Le nouveau nom d'un candidat est reporté dans les paris où il figure, y compris ceux qui ont des pronos.
+function renommerDansParis(tx, id, nom) {
+  tx.findRecordsByFilter("paris", "id != ''", "", 0, 0).forEach((pr) => {
+    const options = lireJSON(pr, "options", []) || [];
+    let change = false;
+    options.forEach((o) => {
+      if (o.id === id && o.label !== nom) {
+        o.label = nom;
+        change = true;
+      }
+    });
+    if (change) {
+      pr.set("options", options);
+      tx.save(pr);
+    }
+  });
+}
+
+function etatTableau(app) {
+  const ctx = contexteTableau(app);
+  const paris = app.findRecordsByFilter("paris", "id != ''", "cloture", 0, 0).map(pariDepuisRecord)
+    .filter((p) => p.config && p.config.lien)
+    .map((p) => ({ id: p.id, titre: p.titre, lien: p.config.lien, statut: p.statut, cloture: p.cloture, nbOptions: (p.options || []).length,
+      nbPronos: app.countRecords("pronos", $dbx.exp("pari = {:p}", { p: p.id })) }));
+  const liens = {};
+  Object.keys(LIENS).forEach((k) => { liens[k] = { nom: LIENS[k].nom, type: LIENS[k].type }; });
+  return {
+    candidats: ctx.candidats,
+    scrutin: ctx.scrutin,
+    cotes: cotesAffichees(ctx),
+    paris: paris,
+    liens: liens,
+  };
+}
+
+// ---------- Import des intentions de vote ----------
+
+// Source : le jeu de données ouvert de « 2027 et moi » (Licence ouverte), qui reprend les notices
+// déposées à la Commission des sondages. Un fichier par sondage et par hypothèse, sur environ sept semaines.
+const SOURCE_SONDAGES = "https://raw.githubusercontent.com/2027etmoi/2027etmoi/main/data/sondages.json";
+const SOURCE_NOMS = "https://raw.githubusercontent.com/2027etmoi/2027etmoi/main/data/candidats.json";
+
+function slug(s) {
+  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+// Moyenne par candidat : d'abord la moyenne des hypothèses de chaque sondage où il figure,
+// puis la moyenne de ces sondages.
+function moyennesSondages(donnees) {
+  const parSondage = {};
+  const sondages = (donnees && donnees.sondages) || [];
+  sondages.forEach((s, i) => {
+    const somme = {};
+    const nb = {};
+    (s.hypotheses || []).forEach((h) => {
+      const sc = h.scores || {};
+      Object.keys(sc).forEach((id) => {
+        const v = Number(sc[id]);
+        if (!isFinite(v)) return;
+        somme[id] = (somme[id] || 0) + v;
+        nb[id] = (nb[id] || 0) + 1;
+      });
+    });
+    Object.keys(somme).forEach((id) => {
+      if (!parSondage[id]) parSondage[id] = [];
+      parSondage[id].push(somme[id] / nb[id]);
+    });
+  });
+  const moyennes = {};
+  Object.keys(parSondage).forEach((id) => {
+    const l = parSondage[id];
+    moyennes[id] = { valeur: arrondir(l.reduce((a, b) => a + b, 0) / l.length, 1), sondages: l.length };
+  });
+  const dates = sondages.map((s) => s.terrain_fin).filter(Boolean).sort();
+  return { moyennes: moyennes, nb: sondages.length, du: dates[0] || "", au: dates[dates.length - 1] || "", mise_a_jour: (donnees && donnees.mise_a_jour) || "" };
+}
+
+// Rapproche un identifiant de la source (« le-pen ») d'un candidat du jeu (« Marine Le Pen »).
+function rapprocher(idSource, nomSource, candidats) {
+  const cibleNom = slug(nomSource);
+  let trouve = candidats.find((c) => cibleNom && slug(c.nom) === cibleNom);
+  if (!trouve) trouve = candidats.find((c) => slug(c.nom) === idSource || slug(c.nom).endsWith("-" + idSource));
+  return trouve || null;
+}
+
+function lireReponseHttp(res) {
+  if (res.statusCode !== 200) throw erreur("La source des sondages ne répond pas (code " + res.statusCode + ").");
+  if (res.json) return res.json;
+  return JSON.parse(toString(res.body));
+}
+
+function importerSondages(app) {
+  let donnees;
+  let noms = {};
+  try {
+    donnees = lireReponseHttp($http.send({ url: SOURCE_SONDAGES, method: "GET", timeout: 30 }));
+    try {
+      const c = lireReponseHttp($http.send({ url: SOURCE_NOMS, method: "GET", timeout: 30 }));
+      (c.candidats || []).forEach((x) => { noms[x.id] = x.nom; });
+    } catch (err) { noms = {}; }
+  } catch (err) {
+    throw erreur("Import impossible : le serveur du jeu n'arrive pas à joindre la source des sondages. " + (err && err.message ? err.message : ""));
+  }
+  Object.keys((donnees && donnees.noms_hors_liste) || {}).forEach((id) => { if (!noms[id]) noms[id] = donnees.noms_hors_liste[id]; });
+  const m = moyennesSondages(donnees);
+  const recs = app.findRecordsByFilter("candidats", "id != ''", "nom", 0, 0);
+  const candidats = recs.map((r) => ({ id: r.id, nom: r.getString("nom"), rec: r }));
+  const trouves = [];
+  const horsTableau = [];
+  const vus = {};
+  Object.keys(m.moyennes).forEach((idSource) => {
+    const c = rapprocher(idSource, noms[idSource] || "", candidats);
+    if (!c) { horsTableau.push((noms[idSource] || idSource) + " (" + String(m.moyennes[idSource].valeur).replace(".", ",") + " %)"); return; }
+    vus[c.id] = true;
+    const d = lireJSON(c.rec, "donnees", {}) || {};
+    d.intention_t1 = m.moyennes[idSource].valeur;
+    c.rec.set("donnees", d);
+    app.save(c.rec);
+    trouves.push({ id: c.id, nom: c.nom, valeur: m.moyennes[idSource].valeur, sondages: m.moyennes[idSource].sondages });
+  });
+  const s = lireScrutin(app);
+  s.sondage = { source: "2027 et moi, d'après les notices de la Commission des sondages", url: "https://github.com/2027etmoi/2027etmoi", mise_a_jour: m.mise_a_jour, importe_le: new Date().toISOString(), nb: m.nb, du: m.du, au: m.au };
+  ecrireScrutin(app, s);
+  const sansSondage = recs.filter((r) => !vus[r.id] && (r.getString("statut") === "declare" || r.getString("statut") === "officiel")).map((r) => r.getString("nom"));
+  return { trouves: trouves, horsTableau: horsTableau, sansSondage: sansSondage, sondage: s.sondage };
 }
 
 // ---------- Accès aux données ----------
@@ -780,7 +1383,7 @@ function duelDepuisRecord(d) {
 }
 
 module.exports = {
-  TYPES, PHASES, STATUTS_CANDIDAT, PLAFOND_POINTS, MAX_OUI_NON,
+  TYPES, PHASES, STATUTS_CANDIDAT, PLAFOND_POINTS,
   lireJSON, dateMs, versISO, erreur,
   pariDepuisRecord, pronoDepuisRecord, joueurDepuisRecord,
   etatPari, estDevoile, pointsProba, calculerPoints,
@@ -788,4 +1391,6 @@ module.exports = {
   statistiques, issueDuel, classementComplet,
   trouver, tous, exigerAdmin, stable, recalculerPoints,
   guildeDepuisRecord, candidatDepuisRecord, duelDepuisRecord,
+  NOMS_TYPES, LIENS, nombreOuNull, ajusterSomme, cotesPremierTour, cotesSecondTour, moyennesSondages, rapprocher, slug,
+  renommerDansParis, etatTableau, lireScrutin, ecrireScrutin, donneesCandidat, contexteTableau, optionsReliees, synchroniserParis, cotesAffichees, importerSondages,
 };
