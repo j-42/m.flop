@@ -10,8 +10,9 @@ window.JEU = {
   // sous le nom affiche.jpg. Laisse "" pour ne pas afficher d’image.
   affiche: "perso/affiche.jpg",
 
-  // Sons activés par défaut pour un nouveau joueur. Chacun peut les couper avec le bouton de l'en-tête.
-  sonParDefaut: true,
+  // Musique de fond : dépose perso/sons/musique.mp3. Chaque joueur règle le volume de la musique
+  // (coupée par défaut) et celui des bruitages avec le bouton de l'en-tête ; ses réglages sont mémorisés.
+  // Sons par bord politique : dépose des fichiers courts dans perso/sons/<bord>/ (voir perso/LISEZMOI.txt).
 
   // Les grades de la carrière politique : nom, points nécessaires, icône.
   grades: [

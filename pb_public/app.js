@@ -20,7 +20,7 @@
     saisie: {}, filtres: {},
     edition: null, resolution: {},
     ecart: 0, derniereRoute: "",
-    tableau: null, tableauFrais: false, rapportImport: null, filtreTableau: "", calendrier: null,
+    jetonRoute: 0, tableau: null, tableauFrais: false, rapportImport: null, filtreTableau: "", calendrier: null,
   };
 
   const PHASES = { campagne: "Campagne", parrainages: "Parrainages", premier_tour: "1er tour", second_tour: "2nd tour" };
@@ -46,6 +46,9 @@
     blanc_t2: ["Le vote blanc au 2nd tour", "estimation"],
     vote_t2: ["Mon vote au 2nd tour", "vote"],
   };
+  // Bords politiques, pour les sons. Doit rester égal à BORDS dans pb_hooks/jeu_lib.js.
+  const BORDS = { extreme_gauche: "Extrême gauche", gauche: "Gauche", ecolo: "Écologiste", centre: "Centre", droite: "Droite", extreme_droite: "Extrême droite", autre: "Autre" };
+  const BONUS_DUEL = 20;
   const COULEURS_COURBES = ["#3A6FB0", "#2E8B8B", "#C9930F", "#7A4FA3", "#5E8C3A"];
 
   const ICONES = {
@@ -174,19 +177,41 @@
   }
 
   // ======================================================================
-  // Bruitages : fabriqués dans le navigateur, aucun fichier son à charger
+  // Volumes : deux réglages, musique et bruitages, de 0 à 100.
+  // Ouverts par le bouton de l'en-tête, mémorisés dans le navigateur de chaque joueur.
+  // ======================================================================
+
+  const Volumes = (function () {
+    const lire = (cle, defaut) => {
+      try {
+        const v = localStorage.getItem(cle);
+        if (v !== null && isFinite(Number(v))) return Math.max(0, Math.min(100, Number(v)));
+      } catch (err) { /* stockage indisponible */ }
+      return defaut;
+    };
+    // Ancien réglage : musique allumée ou non.
+    let ancienneMusique = false;
+    try { ancienneMusique = localStorage.getItem("flop-musique") === "1"; } catch (err) { /* rien */ }
+    const v = { musique: lire("flop-volume-musique", ancienneMusique ? 30 : 0), bruitages: lire("flop-volume-bruitages", 70) };
+    return {
+      get musique() { return v.musique; },
+      get bruitages() { return v.bruitages; },
+      regler(cle, valeur) {
+        v[cle] = Math.max(0, Math.min(100, Number(valeur) || 0));
+        try { localStorage.setItem("flop-volume-" + cle, String(v[cle])); } catch (err) { /* rien */ }
+      },
+    };
+  })();
+
+  // ======================================================================
+  // Bruitages fabriqués dans le navigateur
   // ======================================================================
 
   const Son = (function () {
     let ctx = null;
     let sortie = null;
-    let actif = JEU.sonParDefaut !== false;
-    try {
-      const v = localStorage.getItem("flop-son");
-      if (v !== null) actif = v === "1";
-    } catch (err) { /* stockage indisponible */ }
     function pret() {
-      if (!actif) return null;
+      if (!Volumes.bruitages) return null;
       // Pas de son tant que la personne n'a pas encore interagi avec la page.
       if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return null;
       if (!ctx) {
@@ -194,9 +219,9 @@
         if (!C) return null;
         ctx = new C();
         sortie = ctx.createGain();
-        sortie.gain.value = 0.5;
         sortie.connect(ctx.destination);
       }
+      sortie.gain.value = 0.7 * (Volumes.bruitages / 100);
       if (ctx.state === "suspended") ctx.resume().catch(() => {});
       return ctx;
     }
@@ -233,13 +258,6 @@
       src.start();
     }
     return {
-      get actif() { return actif; },
-      basculer() {
-        actif = !actif;
-        try { localStorage.setItem("flop-son", actif ? "1" : "0"); } catch (err) { /* rien */ }
-        if (actif) this.pop();
-        return actif;
-      },
       clic() { note(900, 0, 0.05, "triangle", 0.12); },
       pop() { note(480, 0, 0.09, "sine", 0.32, 1150); },
       refus() { note(220, 0, 0.15, "square", 0.07); },
@@ -254,6 +272,75 @@
       rate() { [311, 294, 277, 262].forEach((f, i) => note(f, i * 0.36, i === 3 ? 0.9 : 0.32, "sawtooth", 0.08)); },
     };
   })();
+
+  // ======================================================================
+  // Sons et musique déposés dans perso/ (liste fournie par /api/jeu/sons)
+  // ======================================================================
+
+  const Banque = { bords: {}, valider: [], musique: null };
+  let clipEnCours = null;
+  // Renvoie true si le son est pris en charge (joué, ou bruitages coupés).
+  function jouerFichier(url) {
+    try {
+      if (!Volumes.bruitages) return true;
+      if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return false;
+      if (clipEnCours) clipEnCours.pause();
+      const a = new Audio(encodeURI(url));
+      a.volume = Volumes.bruitages / 100;
+      clipEnCours = a;
+      const lecture = a.play();
+      if (lecture) lecture.catch(() => {});
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+  function auHasard(liste) { return liste[Math.floor(Math.random() * liste.length)]; }
+  // Un son du bord politique du candidat, sinon le petit « pop ».
+  function sonCandidat(id) {
+    const c = S.etat ? (S.etat.candidats || []).find((x) => x.id === id) : null;
+    const liste = c && c.bord ? Banque.bords[c.bord] || [] : [];
+    if (liste.length && jouerFichier(auHasard(liste))) return;
+    Son.pop();
+  }
+  function sonValider() {
+    if (Banque.valider.length && jouerFichier(auHasard(Banque.valider))) return;
+    Son.tampon();
+    Son.piece();
+  }
+
+  // Musique de fond : coupée par défaut (volume à 0).
+  const Musique = (function () {
+    let audio = null;
+    function appliquer() {
+      const v = Volumes.musique;
+      if (!Banque.musique) return;
+      if (!v) { if (audio) audio.pause(); return; }
+      if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
+      if (!audio) {
+        audio = new Audio(encodeURI(Banque.musique));
+        audio.loop = true;
+      }
+      // Courbe douce : les petits réglages restent discrets.
+      audio.volume = Math.pow(v / 100, 2);
+      if (audio.paused) {
+        const lecture = audio.play();
+        if (lecture) lecture.catch(() => {});
+      }
+    }
+    return { appliquer: appliquer };
+  })();
+
+  async function chargerSons() {
+    try {
+      const r = await api("/api/jeu/sons");
+      Banque.bords = r.bords || {};
+      Banque.valider = r.valider || [];
+      Banque.musique = r.musique || null;
+    } catch (err) { /* sans sons : les bruitages du navigateur prennent le relais */ }
+    majBoutonSon();
+    Musique.appliquer();
+  }
 
   const mouvementReduit = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   function confettis(n) {
@@ -359,6 +446,7 @@
     if (hash !== S.derniereRoute) window.scrollTo(0, 0);
     app.classList.toggle("large", hash === "#/admin/candidats");
     S.derniereRoute = hash;
+    S.jetonRoute++;
     let m;
     try {
       if (!connecte) {
@@ -987,7 +1075,7 @@
     const joueurs = parId(e.joueurs);
     const mes = p.duels || [];
     let html = '<div class="section-titre"><h2>Duels</h2></div>';
-    html += '<p class="discret petit">Défie un joueur sur ce pari : celui de vous deux qui marque le plus de points gagne le duel. Si l’un de vous deux n’a pas parié, le duel est annulé. Les duels comptent pour le trophée du Duelliste, pas pour les points.</p>';
+    html += '<p class="discret petit">Tu peux lancer un seul duel par pari : choisis bien ton adversaire. Celui de vous deux qui marque le plus de points sur ce pari gagne ' + BONUS_DUEL + ' points de bonus, le perdant ne perd rien. Si l’un de vous deux n’a pas parié, le duel est annulé.</p>';
     if (mes.length) {
       html += '<ul class="barres" style="margin-bottom:1rem">' + mes.map((d) => {
         const autre = d.lanceur === e.moi.id ? d.adversaire : d.lanceur;
@@ -998,13 +1086,16 @@
         if (d.statut === "termine") {
           const mesPts = d.lanceur === e.moi.id ? d.pointsLanceur : d.pointsAdversaire;
           const sesPts = d.lanceur === e.moi.id ? d.pointsAdversaire : d.pointsLanceur;
-          issue = (d.gagnant === e.moi.id ? "Gagné " : "Perdu ") + nb(mesPts) + " à " + nb(sesPts);
+          issue = (d.gagnant === e.moi.id ? "Gagné " : "Perdu ") + nb(mesPts) + " à " + nb(sesPts) + (d.gagnant === e.moi.id ? ", +" + BONUS_DUEL + " points" : "");
         }
         return '<li class="ligne entre carte" style="padding:.625rem .875rem"><span>Toi contre <strong>' + esc(nom) + "</strong>" +
           (d.lanceur === e.moi.id ? "" : ' <span class="discret petit">(il t’a défié)</span>') + "</span><strong>" + esc(issue) + "</strong></li>";
       }).join("") + "</ul>";
     }
-    if (p.etat === "ouvert") {
+    const dejaLance = mes.some((d) => d.lanceur === e.moi.id);
+    if (p.etat === "ouvert" && dejaLance) {
+      html += '<p class="discret">Tu as lancé ton duel sur ce pari.</p>';
+    } else if (p.etat === "ouvert") {
       const exclus = {};
       exclus[e.moi.id] = true;
       mes.forEach((d) => { exclus[d.lanceur] = true; exclus[d.adversaire] = true; });
@@ -1248,15 +1339,15 @@
       "<p>Les points sont calculés quand l’admin saisit le résultat officiel. Si un résultat est corrigé, les points de tout le monde sont recalculés automatiquement.</p></section>" +
 
       '<section id="r-duels"><h2>Les duels</h2>' +
-      "<p>Sur un pari ouvert, tu peux défier un autre joueur. Une fois le résultat connu, celui de vous deux qui a marqué le plus de points sur ce pari gagne le duel. À points égaux, c’est un match nul. Si l’un de vous deux n’a pas parié, le duel est annulé et ne compte pour personne. Les duels ne rapportent pas de points : ils comptent pour le trophée du Duelliste.</p></section>" +
+      "<p>Sur un pari ouvert, tu peux défier un autre joueur. Tu ne lances qu’un seul duel par pari, mais les autres peuvent te défier autant qu’ils veulent. Une fois le résultat connu, celui de vous deux qui a marqué le plus de points sur ce pari gagne le duel et " + BONUS_DUEL + " points de bonus. Le perdant ne perd rien. À points égaux, c’est un match nul, sans bonus. Si l’un de vous deux n’a pas parié, le duel est annulé et ne compte pour personne. Les duels gagnés comptent aussi pour le trophée du Duelliste.</p></section>" +
 
       '<section id="r-guildes"><h2>Les guildes</h2>' +
-      "<p>À l’inscription, chaque joueur choisit sa guilde, une fois pour toutes. Le classement des guildes se fait sur la moyenne des points de leurs membres : une petite guilde a autant de chances qu’une grande. Le classement général reste individuel.</p></section>" +
+      "<p>À l’inscription, chaque joueur choisit sa guilde. Ensuite, seul l’admin du jeu peut la changer. Le classement des guildes se fait sur la moyenne des points de leurs membres : une petite guilde a autant de chances qu’une grande. Le classement général reste individuel.</p></section>" +
 
       '<section id="r-grades"><h2>Les grades</h2>' +
       "<p>Tes points te font monter en grade dans ta carrière politique. À chaque nouveau grade, une promotion t’attend à ta prochaine visite.</p>" +
       '<div class="defile"><table class="table-joueurs"><tbody>' + JEU.grades.map((g) => "<tr><td>" + esc(g[2]) + " <strong>" + esc(g[0]) + '</strong></td><td class="num">' + nb(g[1]) + " points</td></tr>").join("") + "</tbody></table></div>" +
-      "<p>Le site fait de petits bruitages : un pop quand tu choisis, un tampon quand tu valides, une fanfare quand tu gagnes. Le bouton en forme de haut-parleur, en haut de l’écran, les coupe.</p></section>" +
+      "<p>Le site fait des bruitages : un son quand tu choisis un candidat, selon son bord politique, un autre quand tu valides, une fanfare quand tu gagnes. Il peut aussi jouer une musique de fond. Le bouton en forme de haut-parleur, en haut de l’écran, règle le volume de la musique et celui des bruitages ; à zéro, ils sont coupés. Tes réglages sont gardés dans ton navigateur.</p></section>" +
       '<section id="r-trophees"><h2>Les trophées</h2><p>Remis après le second tour. Avant, le classement des trophées est provisoire. Les ex æquo reçoivent tous le trophée.</p>' +
       '<div class="defile"><table class="table-joueurs"><tbody>' + trophees.map((t) => "<tr><td><strong>" + esc(t[0]) + "</strong></td><td>" + esc(t[1]) + "</td></tr>").join("") + "</tbody></table></div></section>" +
 
@@ -1264,7 +1355,8 @@
       "<h3>Deux joueurs ont le même nombre de points ?</h3><p>Ils partagent le même rang.</p>" +
       "<h3>Un candidat se retire alors que j’ai parié sur lui ?</h3><p>Ton pari reste valable. S’il n’est pas sur la liste officielle, il ne peut pas finir sur le podium : la réponse rapporte 0 point.</p>" +
       "<h3>Qui fixe les probabilités ?</h3><p>L’admin du jeu saisit les intentions de vote, importées des sondages publiés et ajustées si besoin. Le jeu en déduit les probabilités de chaque pari du 1er tour en simulant 10 000 fois le scrutin, avec la marge d’erreur habituelle des sondages. Pour l’élu, il part des intentions de vote du 2nd tour. Les probabilités sont visibles par tout le monde sur chaque pari, et ne peuvent plus changer dès qu’un joueur a parié.</p>" +
-      "<h3>Je peux changer de pseudo ?</h3><p>Oui, dans ton Profil. Tes paris, tes points et tes duels te suivent. Ta guilde, elle, ne change pas.</p>" +
+      "<h3>Je peux changer de pseudo ?</h3><p>Oui, dans ton Profil. Tes paris, tes points et tes duels te suivent.</p>" +
+      "<h3>Je peux changer de guilde ?</h3><p>Demande à l’admin du jeu : lui seul peut la changer. Tes points comptent alors pour ta nouvelle guilde.</p>" +
       "<h3>J’ai oublié mon mot de passe.</h3><p>Demande à l’admin du jeu : il peut le réinitialiser.</p>" +
       "<h3>Un résultat me semble faux.</h3><p>Signale-le à l’admin : il peut corriger le résultat, et les points sont recalculés.</p></section>" +
 
@@ -1327,7 +1419,10 @@
   // ======================================================================
 
   async function vueAdmin(onglet, id) {
+    // Si l'admin change d'onglet pendant un chargement, la réponse arrivée trop tard est ignorée.
+    const jeton = S.jetonRoute;
     const e = await chargerEtat();
+    if (jeton !== S.jetonRoute) return;
     if (e.moi.role !== "admin") {
       rendre('<div class="message message-erreur">Réservé à l’admin du jeu.</div>');
       return;
@@ -1338,11 +1433,15 @@
 
     let html = '<a class="retour" href="#/profil">' + ICONES.retour + "Profil</a><h1>Administration</h1>" +
       '<nav class="onglets" aria-label="Administration">' + onglets.map((o) => '<a href="#/admin/' + o[0] + '"' + (o[0] === onglet ? ' aria-current="page"' : "") + ">" + o[1] + "</a>").join("") + "</nav>";
-    if (onglet === "candidats") html += await adminTableau();
-    else if (onglet === "invitations") html += await adminInvitations();
-    else if (onglet === "joueurs") html += await adminJoueurs(e);
-    else html += adminParis(e);
-    rendre(html);
+    // L'onglet choisi s'affiche tout de suite, avant la réponse du serveur.
+    if ((onglet === "candidats" && !S.tableauFrais) || onglet === "invitations" || onglet === "joueurs") rendre(html + '<p class="chargement">Chargement…</p>');
+    let corps;
+    if (onglet === "candidats") corps = await adminTableau();
+    else if (onglet === "invitations") corps = await adminInvitations();
+    else if (onglet === "joueurs") corps = await adminJoueurs(e);
+    else corps = adminParis(e);
+    if (jeton !== S.jetonRoute) return;
+    rendre(html + corps);
     const filtreTab = app.querySelector('[data-input="tab-filtre"]');
     if (filtreTab && filtreTab.value) SAISIES["tab-filtre"](filtreTab);
   }
@@ -1579,71 +1678,61 @@
 
   function rangTxt(n) { return n === 1 ? "1er" : n + "e"; }
 
+  function ligneCandidat(c, nouveau) {
+    const val = (v) => (v === null || v === undefined ? "" : v);
+    const num = (k, min, max, titre) => '<td class="pct"><input type="number" inputmode="decimal" step="0.1" min="' + min + '" max="' + max + '" value="' + esc(val(c[k])) + '" data-tab="' + k + '" data-input="tab-num" aria-label="' + esc(titre + (c.nom ? " de " + c.nom : "")) + '"></td>';
+    const courts = { declare: "Déclaré", officiel: "Officiel", non_retenu: "Non retenu", retire: "Retiré" };
+    const statut = '<select data-tab="statut" aria-label="Statut' + esc(c.nom ? " de " + c.nom : "") + '">' + Object.keys(courts).map((k) => '<option value="' + k + '"' + (k === c.statut ? " selected" : "") + ">" + courts[k] + "</option>").join("") + "</select>";
+    const bord = '<select data-tab="bord" aria-label="Bord politique' + esc(c.nom ? " de " + c.nom : "") + '"><option value="">Non renseigné</option>' + Object.keys(BORDS).map((k) => '<option value="' + k + '"' + (k === c.bord ? " selected" : "") + ">" + BORDS[k] + "</option>").join("") + "</select>";
+    return '<tr data-ligne-cand="' + esc(c.id || "") + '" data-nom-cand="' + esc(c.nom || "") + '" class="statut-' + esc(c.statut) + (nouveau ? " nouveau" : "") + '">' +
+      '<td><input type="text" value="' + esc(c.nom || "") + '" data-tab="nom" maxlength="80" aria-label="Nom" placeholder="Nom du candidat"></td>' +
+      '<td><input type="text" value="' + esc(c.parti || "") + '" data-tab="parti" maxlength="120" aria-label="Parti' + esc(c.nom ? " de " + c.nom : "") + '"></td>' +
+      "<td>" + statut + "</td><td>" + bord + "</td>" +
+      num("cote_parrainages", 1, 99, "Cote des 500 signatures") + num("intention_t1", 0, 100, "Intention de vote au 1er tour") +
+      num("intention_t2", 0, 100, "Intention de vote au 2nd tour") + num("score_t1", 0, 100, "Score au 1er tour") + num("score_t2", 0, 100, "Score au 2nd tour") +
+      '<td class="actions"><button type="button" class="bouton-lien" data-action="supprimer-candidat">Supprimer</button></td></tr>';
+  }
+
   async function adminTableau() {
     const t = S.tableauFrais && S.tableau ? S.tableau : await api("/api/jeu/admin/tableau");
     S.tableau = t;
     S.tableauFrais = false;
     const sc = t.scrutin || {};
     const cotes = t.cotes || {};
+    const parIdC = parId(t.candidats);
     const ordreStatut = { officiel: 0, declare: 1, non_retenu: 2, retire: 3 };
     const liste = t.candidats.slice().sort((a, b) =>
       (ordreStatut[a.statut] - ordreStatut[b.statut]) ||
       ((b.intention_t1 === null ? -1 : b.intention_t1) - (a.intention_t1 === null ? -1 : a.intention_t1)) ||
       a.nom.localeCompare(b.nom));
-    // Rangs réels, d'après les scores saisis.
-    const rang = (champ, ids) => {
-      const r = {};
-      t.candidats.filter((c) => c[champ] !== null && (!ids || ids.indexOf(c.id) >= 0)).sort((a, b) => b[champ] - a[champ]).forEach((c, i) => { r[c.id] = i + 1; });
-      return r;
-    };
-    const rangT1 = rang("score_t1", cotes.candidatsT1);
-    const rangT2 = rang("score_t2", cotes.finalistes);
     const val = (v) => (v === null || v === undefined ? "" : v);
-    const num = (c, k, min, max, titre) => '<td class="pct"><input type="number" inputmode="decimal" step="0.1" min="' + min + '" max="' + max + '" value="' + esc(val(c[k])) + '" data-tab="' + k + '" data-input="tab-num" aria-label="' + esc(titre + " de " + c.nom) + '"></td>';
-    const statut = (c) => '<select data-tab="statut" aria-label="Statut de ' + esc(c.nom) + '">' + Object.keys(STATUTS_CANDIDAT).map((k) => '<option value="' + k + '"' + (k === c.statut ? " selected" : "") + ">" + STATUTS_CANDIDAT[k] + "</option>").join("") + "</select>";
     const somme = (k) => Math.round(t.candidats.reduce((s, c) => s + (c[k] === null ? 0 : c[k]), 0) * 10) / 10;
 
     let html = '<p class="discret">Un seul tableau pour tout le scrutin. Les paris reliés y prennent leurs réponses, leurs cotes et leur résultat. ' +
       "Les cotes d’un pari sont figées dès qu’un premier joueur a parié dessus.</p>";
 
-    // Sondages
-    const so = sc.sondage;
-    html += '<div class="carte" style="margin-bottom:1.5rem"><h3 style="margin-top:0">Intentions de vote</h3>' +
-      '<p class="petit">Le bouton importe la moyenne des sondages du 1er tour publiés ces dernières semaines : pour chaque candidat, la moyenne des hypothèses de chaque sondage, puis la moyenne des sondages. Tu peux ensuite ajuster chaque valeur dans le tableau.</p>' +
-      (so ? '<p class="petit discret">Dernier import le ' + esc(jour(dms(so.importe_le))) + " : " + pluriel(so.nb || 0, "sondage") + (so.du ? " réalisés du " + esc(jour(dms(so.du))) + " au " + esc(jour(dms(so.au))) : "") + '. Source : <a href="' + esc(so.url) + '" target="_blank" rel="noopener">' + esc(so.source) + "</a>, données mises à jour le " + esc(jour(dms(so.mise_a_jour))) + ".</p>" : "") +
-      (S.rapportImport ? rapportImport(S.rapportImport) : "") +
-      '<button type="button" class="bouton bouton-clair" data-action="importer-sondages">Importer les intentions de vote</button>' +
-      '<p class="petit discret" style="margin-bottom:0">Les sondages du 2nd tour testent des duels hypothétiques : les intentions du 2nd tour se saisissent à la main, une fois les finalistes connus.</p></div>';
-    S.rapportImport = null;
-
     // Étapes
     const etape = (k, titre, aide) => '<label class="etape-scrutin"><input type="checkbox" data-etape="' + k + '"' + (sc[k] ? " checked" : "") + "><span><strong>" + titre + "</strong><small>" + aide + "</small></span></label>";
     html += '<fieldset><legend>Avancement du scrutin</legend>' +
-      etape("liste_officielle", "La liste officielle est publiée", "Les candidats au statut « Sur la liste officielle » ont leurs 500 signatures. Résout les paris des parrainages.") +
+      etape("liste_officielle", "La liste officielle est publiée", "Les candidats au statut « Officiel » ont leurs 500 signatures. Résout les paris des parrainages.") +
       etape("resultats_t1", "Les résultats du 1er tour sont définitifs", "Résout les paris du 1er tour d’après les scores, le vote blanc et l’abstention.") +
       etape("resultats_t2", "Les résultats du 2nd tour sont définitifs", "Résout les paris du 2nd tour.") +
       '<p class="petit discret" style="margin:0">Un pari n’est résolu qu’après sa clôture. Si tu corriges un score ensuite, les points sont recalculés.</p></fieldset>';
 
-    // Le tableau
+    // Candidats
+    const finalistes = (cotes.finalistes || []).map((id) => (parIdC[id] || {}).nom).filter(Boolean);
     html += '<div class="ligne entre" style="margin:1.5rem 0 .75rem"><h2 style="margin:0">Candidats</h2>' +
-      '<input type="search" placeholder="Chercher un nom" aria-label="Chercher un candidat" data-input="tab-filtre" value="' + esc(S.filtreTableau || "") + '" style="max-width:16rem"></div>' +
+      '<div class="ligne"><input type="search" placeholder="Chercher un nom" aria-label="Chercher un candidat" data-input="tab-filtre" value="' + esc(S.filtreTableau || "") + '" style="max-width:16rem">' +
+      '<button type="button" class="bouton bouton-petit bouton-clair" data-action="ajouter-ligne">Ajouter un candidat</button></div></div>' +
+      '<p class="petit discret">' + (finalistes.length === 2
+        ? "Qualifiés pour le 2nd tour, d’après les scores du 1er tour : " + esc(finalistes[0]) + " et " + esc(finalistes[1]) + "."
+        : "Les deux qualifiés pour le 2nd tour seront les deux meilleurs scores du 1er tour.") +
+      " Le bord politique sert aux sons joués quand un joueur choisit ce candidat.</p>" +
       '<div class="defile"><table class="admin-table tableau-candidats"><thead><tr>' +
-      "<th>Candidat</th><th>Parti</th><th>Statut</th>" +
-      '<th class="num">Cote 500 sig.</th><th class="num">Intentions T1</th><th class="num">Intentions T2</th><th class="num">Score T1</th><th class="num">Score T2</th><th>Rang</th>' +
-      "</tr></thead><tbody>" +
-      liste.map((c) => {
-        const r1 = rangT1[c.id];
-        const r2 = rangT2[c.id];
-        const rangs = (r1 ? "T1 : " + rangTxt(r1) + (cotes.finalistes && cotes.finalistes.indexOf(c.id) >= 0 ? ", qualifié" : "") : "") + (r2 ? "<br>T2 : " + (r2 === 1 ? "élu" : rangTxt(r2)) : "");
-        return '<tr data-ligne-cand="' + esc(c.id) + '" data-nom-cand="' + esc(c.nom) + '" class="statut-' + esc(c.statut) + '">' +
-          '<td><input type="text" value="' + esc(c.nom) + '" data-tab="nom" maxlength="80" aria-label="Nom"></td>' +
-          '<td><input type="text" value="' + esc(c.parti) + '" data-tab="parti" maxlength="120" aria-label="Parti de ' + esc(c.nom) + '"></td>' +
-          "<td>" + statut(c) + "</td>" +
-          num(c, "cote_parrainages", 1, 99, "Cote des 500 signatures") + num(c, "intention_t1", 0, 100, "Intention de vote au 1er tour") +
-          num(c, "intention_t2", 0, 100, "Intention de vote au 2nd tour") + num(c, "score_t1", 0, 100, "Score au 1er tour") + num(c, "score_t2", 0, 100, "Score au 2nd tour") +
-          '<td class="petit">' + rangs + "</td></tr>";
-      }).join("") +
-      '</tbody><tfoot><tr><th colspan="3">Total</th><th></th>' +
+      "<th>Candidat</th><th>Parti</th><th>Statut</th><th>Bord</th>" +
+      '<th class="num">Cote 500 sig.</th><th class="num">Intentions T1</th><th class="num">Intentions T2</th><th class="num">Score T1</th><th class="num">Score T2</th><th></th>' +
+      "</tr></thead><tbody>" + liste.map((c) => ligneCandidat(c, false)).join("") +
+      '</tbody><tfoot><tr><th colspan="5">Total</th>' +
       ["intention_t1", "intention_t2", "score_t1", "score_t2"].map((k) => '<th class="num" data-total="' + k + '">' + pctTxt(somme(k)) + "</th>").join("") + "<th></th></tr></tfoot></table></div>";
 
     // Hors candidats
@@ -1653,19 +1742,18 @@
       "<tr><td>Abstention, en % des inscrits</td>" + champScrutin("t1", "abstention", "Abstention au 1er tour") + champScrutin("t2", "abstention", "Abstention au 2nd tour") + "</tr>" +
       "</tbody></table></div>";
 
-    html += '<div class="action-pari"><span class="petit discret">Les cotes 500 signatures vont de 1 à 99 %. Les intentions et les scores sont en % des suffrages exprimés.</span>' +
+    html += '<div class="action-pari"><span class="petit discret">Les cotes 500 signatures vont de 1 à 99 %. Les intentions et les scores sont en % des suffrages exprimés. Ajouts et suppressions sont appliqués à l’enregistrement.</span>' +
       '<button type="button" class="bouton bouton-rouge" data-action="enregistrer-tableau">Enregistrer le tableau</button></div>';
 
     // Cotes calculées
     const ids = (cotes.candidatsT1 || []);
-    const parId2 = parId(t.candidats);
     const c1 = (m, id) => (m && m[id] !== undefined ? pctTxt(m[id]) : "");
     html += '<h2>Cotes calculées</h2><p class="petit discret">Pour les paris du 1er tour, le jeu simule 10 000 fois le scrutin à partir des intentions de vote, avec une marge d’erreur d’environ 4 points pour un candidat à 30 % et d’1 point pour un candidat à 4 %. ' +
       "Un candidat sans intention de vote compte pour 0,5 %. Une cote ne descend jamais sous 1 % ni ne dépasse 99 %. " +
       "Pour l’élu, la cote vient de l’écart entre les deux finalistes dans les intentions du 2nd tour. Les candidats du 1er tour sont ceux de la liste officielle, ou à défaut les déclarés. Ce tableau se met à jour à l’enregistrement.</p>" +
       (ids.length ? '<div class="defile"><table class="admin-table"><thead><tr><th>Candidat</th><th class="num">En tête</th><th class="num">Qualifié</th><th class="num">Podium</th><th class="num">Flop 3</th><th class="num">Dernier</th><th class="num">Élu</th></tr></thead><tbody>' +
-        ids.slice().sort((a, b) => ((parId2[b] || {}).intention_t1 || 0) - ((parId2[a] || {}).intention_t1 || 0)).map((id) =>
-          "<tr><td>" + esc((parId2[id] || {}).nom || "") + '</td><td class="num">' + c1(cotes.premier, id) + '</td><td class="num">' + c1(cotes.qualifie, id) + '</td><td class="num">' + c1(cotes.podium, id) +
+        ids.slice().sort((a, b) => ((parIdC[b] || {}).intention_t1 || 0) - ((parIdC[a] || {}).intention_t1 || 0)).map((id) =>
+          "<tr><td>" + esc((parIdC[id] || {}).nom || "") + '</td><td class="num">' + c1(cotes.premier, id) + '</td><td class="num">' + c1(cotes.qualifie, id) + '</td><td class="num">' + c1(cotes.podium, id) +
           '</td><td class="num">' + c1(cotes.flop, id) + '</td><td class="num">' + c1(cotes.dernier, id) + '</td><td class="num">' + c1(cotes.elu, id) + "</td></tr>").join("") +
         "</tbody></table></div>" : '<p class="discret">Aucun candidat déclaré ou officiel.</p>');
 
@@ -1677,11 +1765,15 @@
         "</tbody></table></div>"
       : '<p class="discret">Aucun pari relié. Dans un pari, choisis « Relié au tableau des candidats ».</p>');
 
-    html += '<form class="carte" data-form="candidat" novalidate style="margin-top:1.5rem"><h3 style="margin-top:0">Ajouter un candidat</h3>' +
-      '<p class="petit discret">Enregistre d’abord le tableau si tu y as fait des changements : l’ajout recharge la page.</p><div class="grille-2">' +
-      '<label class="champ"><span>Nom</span><input type="text" name="nom" maxlength="80" required></label>' +
-      '<label class="champ"><span>Parti</span><input type="text" name="parti" maxlength="120"></label></div>' +
-      '<button class="bouton" type="submit">Ajouter</button></form>';
+    // Intentions de vote : import, en bas car il ne sert qu'à l'occasion.
+    const so = sc.sondage;
+    html += '<div class="carte carte-import" style="margin-top:1.5rem"><h3 style="margin-top:0">Intentions de vote</h3>' +
+      '<p class="petit">Le bouton importe la moyenne des sondages du 1er tour publiés ces dernières semaines : pour chaque candidat, la moyenne des hypothèses de chaque sondage, puis la moyenne des sondages. Il renseigne aussi le bord politique des candidats qui n’en ont pas. Tu peux ensuite ajuster chaque valeur dans le tableau.</p>' +
+      (so ? '<p class="petit discret">Dernier import le ' + esc(jour(dms(so.importe_le))) + " : " + pluriel(so.nb || 0, "sondage") + (so.du ? " réalisés du " + esc(jour(dms(so.du))) + " au " + esc(jour(dms(so.au))) : "") + '. Source : <a href="' + esc(so.url) + '" target="_blank" rel="noopener">' + esc(so.source) + "</a>, données mises à jour le " + esc(jour(dms(so.mise_a_jour))) + ".</p>" : "") +
+      (S.rapportImport ? rapportImport(S.rapportImport) : "") +
+      '<button type="button" class="bouton bouton-clair" data-action="importer-sondages">Importer les intentions de vote</button>' +
+      '<p class="petit discret" style="margin-bottom:0">Les sondages du 2nd tour testent des duels hypothétiques : les intentions du 2nd tour se saisissent à la main, une fois les finalistes connus.</p></div>';
+    S.rapportImport = null;
     return html;
   }
 
@@ -1690,14 +1782,17 @@
     lignes.push(pluriel(r.trouves.length, "candidat mis à jour", "candidats mis à jour") + ".");
     if (r.horsTableau.length) lignes.push("Dans les sondages mais pas dans le tableau, donc ignorés : " + r.horsTableau.join(", ") + ".");
     if (r.sansSondage.length) lignes.push("Déclarés ou officiels mais absents des sondages, intention inchangée : " + r.sansSondage.join(", ") + ".");
+    if (r.bordsAjoutes) lignes.push(pluriel(r.bordsAjoutes, "bord politique renseigné", "bords politiques renseignés") + ".");
     return '<div class="message message-info petit">' + lignes.map(esc).join("<br>") + "</div>";
   }
 
   function lireTableau() {
-    const candidats = Array.prototype.map.call(app.querySelectorAll("[data-ligne-cand]"), (tr) => {
+    const lignes = Array.prototype.slice.call(app.querySelectorAll("[data-ligne-cand]"));
+    const supprimes = lignes.filter((tr) => tr.classList.contains("a-supprimer") && tr.dataset.ligneCand).map((tr) => tr.dataset.ligneCand);
+    const candidats = lignes.filter((tr) => !tr.classList.contains("a-supprimer") && (tr.dataset.ligneCand || tr.querySelector('[data-tab="nom"]').value.trim())).map((tr) => {
       const v = (k) => tr.querySelector('[data-tab="' + k + '"]').value;
       return {
-        id: tr.dataset.ligneCand, nom: v("nom"), parti: v("parti"), statut: v("statut"),
+        id: tr.dataset.ligneCand, nom: v("nom"), parti: v("parti"), statut: v("statut"), bord: v("bord"),
         cote_parrainages: v("cote_parrainages"), intention_t1: v("intention_t1"), intention_t2: v("intention_t2"), score_t1: v("score_t1"), score_t2: v("score_t2"),
       };
     });
@@ -1707,7 +1802,7 @@
       const k = i.dataset.scrutin.split(".");
       scrutin[k[0]][k[1]] = i.value;
     });
-    return { candidats: candidats, scrutin: scrutin };
+    return { candidats: candidats, supprimes: supprimes, scrutin: scrutin };
   }
 
   function majTotauxTableau() {
@@ -1837,10 +1932,12 @@
 
   async function adminJoueurs(e) {
     const res = await api("/api/jeu/admin/joueurs");
-    return '<p class="discret">Pour réinitialiser un mot de passe ou supprimer un compte, passe par le tableau de bord PocketBase, collection users (voir le README du projet).</p>' +
-      '<div class="defile"><table class="admin-table"><thead><tr><th>Joueur</th><th>Email</th><th>Paris</th><th>Rôle</th></tr></thead><tbody>' +
+    return '<p class="discret">Changer la guilde d’un joueur déplace tous ses points vers sa nouvelle guilde. Pour réinitialiser un mot de passe ou supprimer un compte, passe par le tableau de bord PocketBase, collection users (voir le README du projet).</p>' +
+      '<div class="defile"><table class="admin-table"><thead><tr><th>Joueur</th><th>Guilde</th><th>Email</th><th>Paris</th><th>Rôle</th></tr></thead><tbody>' +
       res.joueurs.map((j) =>
-        "<tr><td><strong>" + esc(j.pseudo) + "</strong><br>" + badgeGuilde(j.guilde) + "</td><td>" + esc(j.email) + '</td><td class="chiffre">' + j.nbParis + "</td>" +
+        "<tr><td><strong>" + esc(j.pseudo) + "</strong></td>" +
+        '<td><select data-guilde-joueur="' + esc(j.id) + '" aria-label="Guilde de ' + esc(j.pseudo) + '">' + e.guildes.map((g) => '<option value="' + esc(g.id) + '"' + (g.id === j.guilde ? " selected" : "") + ">" + esc(g.nom) + "</option>").join("") + "</select></td>" +
+        "<td>" + esc(j.email) + '</td><td class="chiffre">' + j.nbParis + "</td>" +
         "<td>" + (j.id === e.moi.id ? "Admin (toi)" :
           '<button type="button" class="bouton bouton-petit bouton-clair" data-action="role" data-id="' + esc(j.id) + '" data-role="' + (j.role === "admin" ? "joueur" : "admin") + '">' + (j.role === "admin" ? "Retirer l’admin" : "Rendre admin") + "</button>") + "</td></tr>"
       ).join("") + "</tbody></table></div>";
@@ -1868,16 +1965,20 @@
     choisir: (el) => {
       const p = pariCourant(el);
       saisieDe(p).option = el.dataset.option;
-      Son.pop();
+      sonCandidat(el.dataset.option);
       rafraichirPari(p);
     },
     on: (el) => {
       const p = pariCourant(el);
       const s = saisieDe(p);
       s.reponses = s.reponses || {};
-      if (s.reponses[el.dataset.option] === el.dataset.val) delete s.reponses[el.dataset.option];
-      else s.reponses[el.dataset.option] = el.dataset.val;
-      Son.pop();
+      if (s.reponses[el.dataset.option] === el.dataset.val) {
+        delete s.reponses[el.dataset.option];
+        Son.pop();
+      } else {
+        s.reponses[el.dataset.option] = el.dataset.val;
+        sonCandidat(el.dataset.option);
+      }
       rafraichirPari(p);
     },
     "on-effacer": (el) => {
@@ -1890,9 +1991,13 @@
       const s = saisieDe(p);
       s.ordre = s.ordre || [];
       const i = s.ordre.indexOf(el.dataset.option);
-      if (i >= 0) s.ordre.splice(i, 1);
-      else if (s.ordre.length < (Number(p.config.places) || 3)) s.ordre.push(el.dataset.option);
-      Son.pop();
+      if (i >= 0) {
+        s.ordre.splice(i, 1);
+        Son.pop();
+      } else if (s.ordre.length < (Number(p.config.places) || 3)) {
+        s.ordre.push(el.dataset.option);
+        sonCandidat(el.dataset.option);
+      }
       rafraichirPari(p);
     },
     "vider-place": (el) => {
@@ -1907,8 +2012,7 @@
       try {
         await api("/api/jeu/parier", { method: "POST", body: { pari: p.id, reponse: s } });
         coupDeTampon();
-        Son.tampon();
-        Son.piece();
+        sonValider();
         notifier(p.monProno ? "Modification enregistrée." : "Pari enregistré.");
         delete S.saisie[p.id];
         await chargerEtat(true);
@@ -2057,6 +2161,22 @@
         throw err;
       }
     },
+    "ajouter-ligne": () => {
+      const tbody = app.querySelector(".tableau-candidats tbody");
+      if (!tbody) return;
+      const tmp = document.createElement("tbody");
+      tmp.innerHTML = ligneCandidat({ id: "", nom: "", parti: "", statut: "declare", bord: "" }, true);
+      const tr = tmp.firstChild;
+      tbody.insertBefore(tr, tbody.firstChild);
+      tr.querySelector('[data-tab="nom"]').focus();
+    },
+    "supprimer-candidat": (el) => {
+      const tr = el.closest("tr");
+      if (!tr.dataset.ligneCand) { tr.remove(); majTotauxTableau(); return; }
+      const oui = tr.classList.toggle("a-supprimer");
+      el.textContent = oui ? "Annuler" : "Supprimer";
+      if (oui) notifier("« " + tr.dataset.nomCand + " » sera supprimé à l’enregistrement du tableau.");
+    },
     "importer-sondages": async (el) => {
       if (S.tableau && S.tableau.candidats.some((c) => c.intention_t1 !== null) &&
         !confirm("Remplacer les intentions de vote du 1er tour par la moyenne des derniers sondages ? Tes ajustements sur les candidats trouvés dans les sondages seront écrasés.")) return;
@@ -2145,7 +2265,10 @@
     },
     vote: (el) => {
       const p = pariCourant(el);
-      saisieDe(p)[el.dataset.champ] = el.value;
+      const s = saisieDe(p);
+      // Le menu déclenche « input » puis « change » : un seul son.
+      if (s[el.dataset.champ] !== el.value && el.value) sonCandidat(el.value);
+      s[el.dataset.champ] = el.value;
       majBarreAction(p);
     },
     score: (el) => {
@@ -2191,6 +2314,19 @@
       else r.pourcentages[el.dataset.option] = el.value;
     },
   };
+
+  async function changerGuilde(el) {
+    el.disabled = true;
+    try {
+      await api("/api/jeu/admin/guilde", { method: "POST", body: { id: el.dataset.guildeJoueur, guilde: el.value } });
+      invalider();
+      notifier("Guilde changée : " + el.options[el.selectedIndex].text + ".");
+    } catch (err) {
+      notifier(err.message, true);
+    } finally {
+      el.disabled = false;
+    }
+  }
 
   function majBarreAction(p) {
     const barre = app.querySelector(".action-pari");
@@ -2367,6 +2503,7 @@
     if (el.tagName === "SELECT" && el.dataset && el.dataset.input && SAISIES[el.dataset.input]) SAISIES[el.dataset.input](el);
     if (el.dataset && (el.dataset.ed === "type" || el.dataset.ed === "lien" || el.dataset.ed === "phase" || el.dataset.ed === "statut" || el.dataset.edcfg)) saisieEdition(el);
     if (el.dataset && el.dataset.date) saisieDate(el, true);
+    if (el.dataset && el.dataset.guildeJoueur) changerGuilde(el);
   });
 
   document.addEventListener("submit", async (ev) => {
@@ -2395,13 +2532,52 @@
 
   window.addEventListener("hashchange", router);
 
+  // Bouton de l'en-tête : ouvre le réglage des volumes.
   const boutonSon = document.getElementById("bouton-son");
+  const panneauSon = document.getElementById("reglage-son");
+  const curseurMusique = document.getElementById("volume-musique");
+  const curseurBruitages = document.getElementById("volume-bruitages");
   function majBoutonSon() {
-    boutonSon.setAttribute("aria-pressed", String(Son.actif));
-    boutonSon.setAttribute("aria-label", Son.actif ? "Couper le son" : "Activer le son");
+    const muet = !Volumes.musique && !Volumes.bruitages;
+    boutonSon.classList.toggle("muet", muet);
+    boutonSon.setAttribute("aria-expanded", String(!panneauSon.hidden));
+    curseurMusique.value = Volumes.musique;
+    curseurBruitages.value = Volumes.bruitages;
+    document.getElementById("valeur-musique").textContent = Banque.musique ? (Volumes.musique ? Volumes.musique + " %" : "coupée") : "aucune";
+    document.getElementById("valeur-bruitages").textContent = Volumes.bruitages ? Volumes.bruitages + " %" : "coupés";
+    curseurMusique.disabled = !Banque.musique;
   }
-  boutonSon.addEventListener("click", () => { Son.basculer(); majBoutonSon(); });
+  function fermerPanneauSon() {
+    if (panneauSon.hidden) return;
+    panneauSon.hidden = true;
+    majBoutonSon();
+  }
+  boutonSon.addEventListener("click", () => {
+    panneauSon.hidden = !panneauSon.hidden;
+    majBoutonSon();
+    if (!panneauSon.hidden) (Banque.musique ? curseurMusique : curseurBruitages).focus();
+  });
+  curseurMusique.addEventListener("input", () => {
+    Volumes.regler("musique", curseurMusique.value);
+    Musique.appliquer();
+    majBoutonSon();
+  });
+  curseurBruitages.addEventListener("input", () => {
+    Volumes.regler("bruitages", curseurBruitages.value);
+    majBoutonSon();
+  });
+  // Un petit son à la fin du réglage, pour entendre le niveau choisi.
+  curseurBruitages.addEventListener("change", () => Son.pop());
+  document.addEventListener("click", (ev) => {
+    if (!panneauSon.hidden && !ev.target.closest("#reglage-son") && !ev.target.closest("#bouton-son")) fermerPanneauSon();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !panneauSon.hidden) { fermerPanneauSon(); boutonSon.focus(); }
+  });
   majBoutonSon();
+  // Les navigateurs n'autorisent le son qu'après une première action : la musique démarre au premier clic.
+  ["pointerdown", "keydown"].forEach((type) => document.addEventListener(type, () => Musique.appliquer(), { once: true }));
+  chargerSons();
 
   document.getElementById("promo-ok").addEventListener("click", () => {
     Son.pop();

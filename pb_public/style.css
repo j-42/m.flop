@@ -120,7 +120,7 @@ h1, h2, h3 {
 h1 { font-size: clamp(2rem, 7vw, 3rem); }
 h2 { font-size: clamp(1.5rem, 4.5vw, 1.95rem); margin-top: 2.25rem; }
 h3 { font-size: 1.25rem; margin-top: 1.5rem; }
-p { margin: 0 0 1rem; max-width: 65ch; }
+p { margin: 0 0 1rem; }
 small, .petit { font-size: .8125rem; }
 .discret { color: var(--ardoise); }
 .chiffre { font-variant-numeric: tabular-nums lining-nums; }
@@ -1108,7 +1108,24 @@ input[type="search"], input[type="datetime-local"], select, textarea {
 }
 .bouton-son:hover { opacity: 1; }
 .bouton-son svg { width: 1.25rem; height: 1.25rem; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-.bouton-son[aria-pressed="false"] .ondes { display: none; }
+.bouton-son .barre { display: none; }
+.bouton-son.muet .barre { display: inline; }
+.bouton-son.muet .ondes { display: none; }
+.bouton-son[aria-expanded="true"] { opacity: 1; background: rgba(255, 255, 255, .15); }
+.zone-son { position: relative; }
+.reglage-son {
+  position: absolute; top: calc(100% + .625rem); right: 0; z-index: 60;
+  width: 16rem; padding: .875rem 1rem .5rem;
+  background: var(--carte); color: var(--encre);
+  border: 3px solid var(--encre); border-radius: var(--rayon-petit); box-shadow: var(--ombre);
+}
+.reglage-son[hidden] { display: none; }
+.reglage-volume { display: block; margin-bottom: .75rem; }
+.reglage-volume span { display: flex; justify-content: space-between; font-weight: 700; font-size: .9375rem; }
+.reglage-volume output { font-weight: 400; color: var(--ardoise); font-variant-numeric: tabular-nums; }
+.reglage-volume input { width: 100%; accent-color: var(--tampon); }
+.reglage-volume input:disabled { opacity: .4; }
+.reglage-son p { margin: 0 0 .25rem; font-size: .8125rem; color: var(--ardoise); }
 
 /* ---------- Accueil : affiche, titre, progression ---------- */
 .accueil-flop { display: grid; justify-items: center; text-align: center; margin-bottom: 1.5rem; }
@@ -1236,3 +1253,9 @@ tr.cache { display: none; }
 .etape-scrutin small { display: block; color: var(--ardoise); font-size: .875rem; }
 .scores-saisie td.pct { width: 9rem; }
 .scores-saisie input { text-align: right; }
+.tableau-candidats tr.a-supprimer td { opacity: .45; text-decoration: line-through; }
+.tableau-candidats tr.a-supprimer td.actions { opacity: 1; text-decoration: none; }
+.tableau-candidats tr.nouveau td:first-child input { border-color: var(--or); }
+.tableau-candidats td:nth-child(4) select { min-width: 10rem; }
+.carte-import .bouton { margin-bottom: 1rem; }
+

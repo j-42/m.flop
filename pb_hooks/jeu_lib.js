@@ -5,6 +5,8 @@ const TYPES = ["choix", "oui_non", "classement", "estimation", "vote", "scores"]
 const PHASES = ["campagne", "parrainages", "premier_tour", "second_tour"];
 const STATUTS_CANDIDAT = ["declare", "officiel", "non_retenu", "retire"];
 
+// Points gagnés par le vainqueur d'un duel. Le perdant ne perd rien. Un joueur lance un seul duel par pari.
+const BONUS_DUEL = 20;
 // Une réponse rapporte au plus ce nombre de points (avant coefficient) : au-delà, le classement
 // se jouerait à la loterie sur les outsiders à 1 ou 2 %. Le plafond s'applique sous 3,4 % environ.
 const PLAFOND_POINTS = 300;
@@ -582,6 +584,20 @@ function classementComplet(joueurs, guildes, paris, pronos, duels) {
     pointsParPari[pr.pari][pr.joueur] = pr.points;
   });
 
+  // Bonus des duels gagnés, compté avec le pari du duel.
+  const bonusParPari = {};
+  duels.forEach((d) => {
+    const pari = parisParId[d.pari];
+    if (!pari || pari.statut !== "resolu") return;
+    const pts = pointsParPari[d.pari] || {};
+    const issue = issueDuel(d, "resolu", (id) => pts[id] || 0, (id) => pts[id] !== undefined);
+    if (issue.statut !== "termine" || totaux[issue.gagnant] === undefined) return;
+    totaux[issue.gagnant] += BONUS_DUEL;
+    parPhase[issue.gagnant][pari.phase] = (parPhase[issue.gagnant][pari.phase] || 0) + BONUS_DUEL;
+    if (!bonusParPari[d.pari]) bonusParPari[d.pari] = {};
+    bonusParPari[d.pari][issue.gagnant] = (bonusParPari[d.pari][issue.gagnant] || 0) + BONUS_DUEL;
+  });
+
   const listeJoueurs = joueurs
     .map((j) => ({ id: j.id, pseudo: j.pseudo, guilde: j.guilde, points: totaux[j.id], parPhase: parPhase[j.id], nbParis: nbParis[j.id] }))
     .sort((a, b) => b.points - a.points || a.pseudo.localeCompare(b.pseudo));
@@ -610,8 +626,9 @@ function classementComplet(joueurs, guildes, paris, pronos, duels) {
   joueurs.forEach((j) => { series[j.id] = []; });
   resolus.forEach((p) => {
     const pts = pointsParPari[p.id] || {};
+    const bonus = bonusParPari[p.id] || {};
     joueurs.forEach((j) => {
-      cumul[j.id] += pts[j.id] || 0;
+      cumul[j.id] += (pts[j.id] || 0) + (bonus[j.id] || 0);
       series[j.id].push(cumul[j.id]);
     });
   });
@@ -640,6 +657,7 @@ function classementComplet(joueurs, guildes, paris, pronos, duels) {
   });
 
   const trophees = calculerTrophees(joueurs, listeJoueurs, paris, parisParId, pronos, bilanDuels, maintenant);
+  // Le bonus des duels a déjà été ajouté aux totaux, plus haut.
   const termine = paris.length > 0 && paris.every((p) => p.statut === "resolu" || p.statut === "brouillon") &&
     paris.some((p) => p.phase === "second_tour" && p.statut === "resolu");
 
@@ -800,6 +818,12 @@ function calculerTrophees(joueurs, listeJoueurs, paris, parisParId, pronos, bila
 // ses intentions de vote aux deux tours, puis ses scores réels. Plus le vote blanc et l'abstention réels.
 // Les paris « reliés » (config.lien) en tirent leurs réponses, leurs cotes et leur résultat.
 
+// Bords politiques, pour les sons. « autre » regroupe aussi les souverainistes.
+const BORDS = ["extreme_gauche", "gauche", "ecolo", "centre", "droite", "extreme_droite", "autre"];
+const BORD_SOURCE = { gauche: "gauche", ecolo: "ecolo", centre: "centre", droite: "droite", extdroite: "extreme_droite", souverainiste: "autre", autre: "autre" };
+// La source classe l'extrême gauche avec la gauche : on la repère par le parti.
+const PARTIS_EXTREME_GAUCHE = /lutte ouvri|npa|r[ée]volution permanente|parti ouvrier ind[ée]pendant/i;
+
 const NOMS_TYPES = { choix: "Un seul choix", oui_non: "Oui ou non", classement: "Classement", estimation: "Estimation", vote: "Mon vote", scores: "Scores" };
 const BLANC = { id: "x_blanc", label: "Vote blanc" };
 const ABSTENTION = { id: "x_abstention", label: "Abstention" };
@@ -951,6 +975,7 @@ function donneesCandidat(rec) {
     intention_t2: nombreOuNull(d.intention_t2),
     score_t1: nombreOuNull(d.score_t1),
     score_t2: nombreOuNull(d.score_t2),
+    bord: BORDS.indexOf(d.bord) >= 0 ? d.bord : "",
   };
 }
 
@@ -959,7 +984,7 @@ function contexteTableau(app) {
   const candidats = app.findRecordsByFilter("candidats", "id != ''", "nom", 0, 0).map((r) =>
     Object.assign({ id: r.id, nom: r.getString("nom"), parti: r.getString("parti"), statut: r.getString("statut") }, donneesCandidat(r)));
   const scrutin = lireScrutin(app);
-  const ctx = { candidats: candidats, scrutin: scrutin, _cache: {} };
+  const ctx = { app: app, candidats: candidats, scrutin: scrutin, _cache: {} };
   return ctx;
 }
 
@@ -980,9 +1005,31 @@ function finalistes(ctx) {
   return ordre.length >= 2 ? ordre.slice(0, 2) : [];
 }
 
+// La simulation prend une seconde ou plus sur un petit serveur : son résultat est gardé dans « reglages »
+// et réutilisé tant que la liste des candidats du 1er tour et leurs intentions ne changent pas.
 function cotesT1(ctx) {
-  if (!ctx._cache.t1) ctx._cache.t1 = cotesPremierTour(candidatsPremierTour(ctx).map((c) => ({ id: c.id, intention: c.intention_t1 })));
-  return ctx._cache.t1;
+  if (ctx._cache.t1) return ctx._cache.t1;
+  const liste = candidatsPremierTour(ctx).map((c) => ({ id: c.id, intention: c.intention_t1 }));
+  const cle = "v1|" + TIRAGES + "|" + liste.map((c) => c.id + ":" + (c.intention === null ? "" : c.intention)).join(",");
+  let rec = null;
+  if (ctx.app) {
+    try { rec = ctx.app.findFirstRecordByFilter("reglages", "cle = 'cache_cotes'"); } catch (err) { rec = null; }
+    const v = rec ? lireJSON(rec, "valeur", null) : null;
+    if (v && v.cle === cle && v.cotes) { ctx._cache.t1 = v.cotes; return v.cotes; }
+  }
+  const cotes = cotesPremierTour(liste);
+  ctx._cache.t1 = cotes;
+  if (ctx.app) {
+    try {
+      if (!rec) {
+        rec = new Record(ctx.app.findCollectionByNameOrId("reglages"));
+        rec.set("cle", "cache_cotes");
+      }
+      rec.set("valeur", { cle: cle, cotes: cotes });
+      ctx.app.save(rec);
+    } catch (err) { /* le cache est facultatif */ }
+  }
+  return cotes;
 }
 
 function optionsCandidats(liste, cotes) {
@@ -1297,11 +1344,12 @@ function lireReponseHttp(res) {
 function importerSondages(app) {
   let donnees;
   let noms = {};
+  const blocsSource = {};
   try {
     donnees = lireReponseHttp($http.send({ url: SOURCE_SONDAGES, method: "GET", timeout: 30 }));
     try {
       const c = lireReponseHttp($http.send({ url: SOURCE_NOMS, method: "GET", timeout: 30 }));
-      (c.candidats || []).forEach((x) => { noms[x.id] = x.nom; });
+      (c.candidats || []).forEach((x) => { noms[x.id] = x.nom; if (x.bloc) blocsSource[x.id] = x.bloc; });
     } catch (err) { noms = {}; }
   } catch (err) {
     throw erreur("Import impossible : le serveur du jeu n'arrive pas à joindre la source des sondages. " + (err && err.message ? err.message : ""));
@@ -1326,8 +1374,27 @@ function importerSondages(app) {
   const s = lireScrutin(app);
   s.sondage = { source: "2027 et moi, d'après les notices de la Commission des sondages", url: "https://github.com/2027etmoi/2027etmoi", mise_a_jour: m.mise_a_jour, importe_le: new Date().toISOString(), nb: m.nb, du: m.du, au: m.au };
   ecrireScrutin(app, s);
+  // Bords politiques : seulement pour les candidats qui n'en ont pas encore.
+  const blocs = {};
+  Object.keys(noms).forEach((id) => { if (noms[id] && blocsSource[id]) blocs[id] = blocsSource[id]; });
+  let bordsAjoutes = 0;
+  candidats.forEach((c) => {
+    const d = lireJSON(c.rec, "donnees", {}) || {};
+    if (BORDS.indexOf(d.bord) >= 0) return;
+    let bord = "";
+    if (PARTIS_EXTREME_GAUCHE.test(c.rec.getString("parti"))) bord = "extreme_gauche";
+    else {
+      const idSource = Object.keys(blocs).find((id) => rapprocher(id, noms[id], [c]));
+      if (idSource) bord = BORD_SOURCE[blocs[idSource]] || "";
+    }
+    if (!bord) return;
+    d.bord = bord;
+    c.rec.set("donnees", d);
+    app.save(c.rec);
+    bordsAjoutes++;
+  });
   const sansSondage = recs.filter((r) => !vus[r.id] && (r.getString("statut") === "declare" || r.getString("statut") === "officiel")).map((r) => r.getString("nom"));
-  return { trouves: trouves, horsTableau: horsTableau, sansSondage: sansSondage, sondage: s.sondage };
+  return { trouves: trouves, horsTableau: horsTableau, sansSondage: sansSondage, bordsAjoutes: bordsAjoutes, sondage: s.sondage };
 }
 
 // ---------- Accès aux données ----------
@@ -1375,7 +1442,7 @@ function guildeDepuisRecord(g) {
 }
 
 function candidatDepuisRecord(c) {
-  return { id: c.id, nom: c.getString("nom"), parti: c.getString("parti"), statut: c.getString("statut") };
+  return { id: c.id, nom: c.getString("nom"), parti: c.getString("parti"), statut: c.getString("statut"), bord: donneesCandidat(c).bord };
 }
 
 function duelDepuisRecord(d) {
@@ -1383,7 +1450,7 @@ function duelDepuisRecord(d) {
 }
 
 module.exports = {
-  TYPES, PHASES, STATUTS_CANDIDAT, PLAFOND_POINTS,
+  TYPES, PHASES, STATUTS_CANDIDAT, PLAFOND_POINTS, BONUS_DUEL, BORDS,
   lireJSON, dateMs, versISO, erreur,
   pariDepuisRecord, pronoDepuisRecord, joueurDepuisRecord,
   etatPari, estDevoile, pointsProba, calculerPoints,

@@ -220,6 +220,8 @@ routerAdd("POST", "/api/jeu/duel", (e) => {
   const existe = lib.trouver("duels", "pari = {:p} && ((lanceur = {:a} && adversaire = {:b}) || (lanceur = {:b} && adversaire = {:a}))",
     { p: p.id, a: e.auth.id, b: adversaire });
   if (existe) throw new BadRequestError("Un duel existe déjà entre vous deux sur ce pari.");
+  // Un seul duel lancé par joueur et par pari : défier tout le monde ne rapporterait que des bonus sans risque.
+  if (lib.trouver("duels", "pari = {:p} && lanceur = {:a}", { p: p.id, a: e.auth.id })) throw new BadRequestError("Tu as déjà lancé ton duel sur ce pari.");
   const d = new Record($app.findCollectionByNameOrId("duels"));
   d.set("lanceur", e.auth.id);
   d.set("adversaire", adversaire);
@@ -438,7 +440,8 @@ routerAdd("POST", "/api/jeu/admin/tableau", (e) => {
     if (n !== null && (n < min || n > max)) throw new BadRequestError(quoi + " de « " + nom + " » : entre " + min + " et " + max + " %.");
     return n;
   };
-  const lignes = (b.candidats || []).map((c) => {
+  const supprimes = (b.supprimes || []).map(String).filter(Boolean);
+  const lignes = (b.candidats || []).filter((c) => supprimes.indexOf(String(c.id || "")) < 0).map((c) => {
     const nom = String(c.nom || "").trim();
     if (!nom) throw new BadRequestError("Chaque candidat doit avoir un nom.");
     return {
@@ -452,6 +455,7 @@ routerAdd("POST", "/api/jeu/admin/tableau", (e) => {
         intention_t2: lire(c.intention_t2, 0, 100, "L'intention de vote au 2nd tour", nom),
         score_t1: lire(c.score_t1, 0, 100, "Le score au 1er tour", nom),
         score_t2: lire(c.score_t2, 0, 100, "Le score au 2nd tour", nom),
+        bord: lib.BORDS.indexOf(c.bord) >= 0 ? c.bord : "",
       },
     };
   });
@@ -467,17 +471,48 @@ routerAdd("POST", "/api/jeu/admin/tableau", (e) => {
       blanc: lire(src.blanc, 0, 100, "Le vote blanc", t === "t1" ? "1er tour" : "2nd tour"),
     };
   });
+  // Un candidat ne peut être supprimé que s'il ne figure dans aucun pari où des joueurs ont parié.
+  // Sinon, le passer en « Retiré ».
+  const parisAvecPronos = lib.tous("paris").filter((pr) => $app.countRecords("pronos", $dbx.exp("pari = {:p}", { p: pr.id })) > 0);
+  supprimes.forEach((id) => {
+    const rec = lib.trouver("candidats", "id = {:id}", { id: id });
+    if (!rec) return;
+    parisAvecPronos.forEach((pr) => {
+      if ((lib.lireJSON(pr, "options", []) || []).some((o) => o.id === id)) {
+        throw new BadRequestError("« " + rec.getString("nom") + " » figure dans le pari « " + pr.getString("titre") + " », où des joueurs ont déjà parié : il ne peut pas être supprimé. Passe-le en « Retiré ».");
+      }
+    });
+  });
   $app.runInTransaction((tx) => {
+    supprimes.forEach((id) => {
+      let rec = null;
+      try { rec = tx.findRecordById("candidats", id); } catch (err) { rec = null; }
+      if (!rec) return;
+      // Retiré des réponses des paris sans pronos.
+      tx.findRecordsByFilter("paris", "id != ''", "", 0, 0).forEach((pr) => {
+        const options = lib.lireJSON(pr, "options", []) || [];
+        const reste = options.filter((o) => o.id !== id);
+        if (reste.length !== options.length) {
+          pr.set("options", reste);
+          tx.save(pr);
+        }
+      });
+      tx.delete(rec);
+    });
     lignes.forEach((l) => {
       let rec;
-      try { rec = tx.findRecordById("candidats", l.id); } catch (err) { throw new BadRequestError("Le candidat « " + l.nom + " » n'existe plus : recharge la page."); }
+      if (!l.id) {
+        rec = new Record(tx.findCollectionByNameOrId("candidats"));
+      } else {
+        try { rec = tx.findRecordById("candidats", l.id); } catch (err) { throw new BadRequestError("Le candidat « " + l.nom + " » n'existe plus : recharge la page."); }
+      }
       const ancienNom = rec.getString("nom");
       rec.set("nom", l.nom);
       rec.set("parti", l.parti);
       rec.set("statut", l.statut);
       rec.set("donnees", l.donnees);
       tx.save(rec);
-      if (ancienNom !== l.nom) lib.renommerDansParis(tx, rec.id, l.nom);
+      if (l.id && ancienNom !== l.nom) lib.renommerDansParis(tx, rec.id, l.nom);
     });
     lib.ecrireScrutin(tx, s);
   });
@@ -498,4 +533,52 @@ routerAdd("POST", "/api/jeu/admin/import-sondages", (e) => {
 cronAdd("flop-paris-relies", "*/10 * * * *", () => {
   const lib = require(`${__hooks}/jeu_lib.js`);
   try { lib.synchroniserParis($app, true); } catch (err) { $app.logger().error("Synchronisation des paris reliés", "erreur", String(err)); }
+});
+
+routerAdd("POST", "/api/jeu/admin/guilde", (e) => {
+  const lib = require(`${__hooks}/jeu_lib.js`);
+  lib.exigerAdmin(e);
+  const b = e.requestInfo().body || {};
+  const u = lib.trouver("users", "id = {:id}", { id: String(b.id || "") });
+  if (!u) throw new NotFoundError("Ce joueur n’existe pas.");
+  const g = lib.trouver("guildes", "id = {:id}", { id: String(b.guilde || "") });
+  if (!g) throw new BadRequestError("Cette guilde n’existe pas.");
+  u.set("guilde", g.id);
+  $app.save(u);
+  return e.json(200, { ok: true });
+}, $apis.requireAuth("users"));
+
+// ---------- Public : sons et musique déposés dans perso/ ----------
+// perso/sons/<bord>/*.mp3 : sons joués quand on choisit un candidat de ce bord.
+// perso/sons/valider.mp3 (ou un dossier perso/sons/valider/) : son joué quand on valide un pari.
+// perso/sons/musique.mp3 : musique de fond, allumée et coupée par le bouton son.
+routerAdd("GET", "/api/jeu/sons", (e) => {
+  const lib = require(`${__hooks}/jeu_lib.js`);
+  const base = __hooks + "/../pb_public/perso";
+  const ext = /\.(mp3|ogg|wav|m4a)$/i;
+  const lister = (dossier) => {
+    try {
+      return $os.readDir(base + "/" + dossier)
+        .filter((d) => !d.isDir() && ext.test(d.name()) && d.name().indexOf(".") !== 0)
+        .map((d) => "perso/" + dossier + "/" + d.name())
+        .sort();
+    } catch (err) {
+      return [];
+    }
+  };
+  const premier = (noms) => {
+    for (let i = 0; i < noms.length; i++) {
+      try {
+        $os.stat(base + "/" + noms[i]);
+        return "perso/" + noms[i];
+      } catch (err) { /* absent */ }
+    }
+    return null;
+  };
+  const bords = {};
+  lib.BORDS.forEach((b) => { bords[b] = lister("sons/" + b); });
+  const valider = lister("sons/valider");
+  const fichierValider = premier(["sons/valider.mp3", "sons/valider.ogg", "sons/valider.wav", "sons/valider.m4a"]);
+  if (fichierValider) valider.unshift(fichierValider);
+  return e.json(200, { bords: bords, valider: valider, musique: premier(["sons/musique.mp3", "sons/musique.ogg", "sons/musique.m4a", "musique.mp3"]) });
 });

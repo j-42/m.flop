@@ -1,10 +1,63 @@
-Dépose ici l'image d'accueil du jeu, sous le nom affiche.jpg.
+DOSSIER PERSO : image d'accueil, sons et musique du jeu
+=======================================================
 
-Elle s'affiche en haut de la page d'accueil et de la page de connexion,
-devant un soleil jaune. Format conseillé : portrait, environ 900 × 1100 pixels,
-moins de 500 Ko. Sans fichier, l'accueil s'affiche simplement sans image.
+Après tout ajout, remplacement ou suppression de fichier dans ce dossier :
+  1. reconstruire l'image Docker : docker compose up -d --build
+  2. chaque joueur recharge la page.
 
-Pour utiliser un autre nom ou un autre format (affiche.png, affiche.webp),
-modifie la ligne « affiche » dans pb_public/config.js.
 
-Après tout changement, reconstruire l'image Docker : docker compose up -d --build
+IMAGE D'ACCUEIL
+---------------
+
+perso/affiche.jpg
+
+Elle s'affiche en haut de la page d'accueil et de la page de connexion.
+Format conseillé : portrait, environ 900 × 1100 pixels, moins de 500 Ko.
+Sans fichier, l'accueil s'affiche sans image. Pour un autre nom ou un autre
+format (affiche.png, affiche.webp), modifier la ligne « affiche » dans
+pb_public/config.js.
+
+
+SONS ET MUSIQUE
+---------------
+
+perso/sons/
+  musique.mp3        musique de fond, jouée en boucle
+  extreme_gauche/    sons des candidats d'extrême gauche
+  gauche/            sons des candidats de gauche
+  ecolo/             sons des candidats écologistes
+  centre/            sons des candidats du centre
+  droite/            sons des candidats de droite
+  extreme_droite/    sons des candidats d'extrême droite
+  autre/             sons des autres candidats, souverainistes compris
+  valider/           sons du bouton « Valider mon pari »
+
+Sons des bords
+  Quand un joueur choisit un candidat (bulletin, oui ou non, classement,
+  menu de « Mon vote »), le jeu joue un fichier tiré au hasard dans le
+  dossier du bord de ce candidat. Le bord se règle dans le tableau des
+  candidats de l'administration. Dossier vide ou candidat sans bord :
+  le petit « pop » habituel.
+
+Valider mon pari
+  Un fichier tiré au hasard dans valider/. Dossier vide : le bruit de
+  tampon habituel.
+
+Musique de fond
+  Jouée en boucle. Elle démarre au premier clic sur la page.
+
+Volumes
+  Le bouton en forme de haut-parleur, en haut de l'écran, ouvre deux
+  curseurs : musique (25 par défaut, discret) et bruitages (sons des bords, son
+  « Valider » et petits sons du jeu). À zéro, c'est coupé. Chaque joueur
+  règle les siens, gardés dans son navigateur.
+
+Règles pour les fichiers
+  - Autant de fichiers que voulu par dossier, noms libres.
+  - Formats : mp3, ogg, wav, m4a. Les autres fichiers sont ignorés.
+  - Les fichiers dont le nom commence par un point sont ignorés : les
+    .gitkeep servent seulement à garder les dossiers vides dans Git.
+  - Durée conseillée : une à deux secondes. Un nouveau clic coupe le son
+    en cours.
+  - Volumes à harmoniser entre fichiers, pour qu'aucun ne fasse sursauter.
+  - Utiliser des sons libres de droits ou faits soi-même.

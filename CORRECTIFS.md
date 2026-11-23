@@ -63,3 +63,16 @@ Paris ajoutés en brouillon par la migration : Scores du 1er tour, Vote blanc au
 | 1 | Au oui/non, la limite de 10 noms par joueur est retirée : on répond pour autant de noms qu'on veut. Une mauvaise réponse ne coûte toujours rien | `pb_hooks/jeu_lib.js`, `pb_public/app.js` |
 | 2 | Dans l'éditeur de pari, les dates se saisissent au format jj/mm/aaaa et hh:mm sur 24 heures, avec un calendrier en français. Le champ natif du navigateur suivait la langue du navigateur (format américain et AM/PM sur un navigateur en anglais) | `pb_public/app.js`, `pb_public/style.css` |
 
+## Duels, guildes, sons, administration
+
+| # | Changement | Fichiers |
+|---|---|---|
+| 1 | Duels : un joueur lance un seul duel par pari (il peut toujours être défié par d'autres). Le gagnant reçoit 20 points de bonus, compté dans le classement, les grades et les trophées. Le perdant ne perd rien, un match nul ne rapporte rien. Avant, défier tout le monde ne coûtait rien | `pb_hooks/jeu_lib.js` (`BONUS_DUEL`, `classementComplet`), `pb_hooks/main.pb.js` (`/api/jeu/duel`), `pb_public/app.js` |
+| 2 | L'admin peut changer la guilde d'un joueur, dans l'onglet Joueurs | `/api/jeu/admin/guilde`, `adminJoueurs` |
+| 3 | Bord politique de chaque candidat dans le tableau, renseigné à l'import des sondages pour les candidats qui n'en ont pas. Sept bords : extrême gauche, gauche, écologiste, centre, droite, extrême droite, autre | `BORDS`, `importerSondages` |
+| 4 | Sons déposés dans `perso/sons/` : un son au hasard du bord du candidat choisi (bulletin, oui/non, classement, menu « Mon vote »), un son pour « Valider mon pari », une musique de fond. Le bouton de l'en-tête ouvre deux curseurs de volume, musique (25 par défaut, discret) et bruitages, gardés dans le navigateur de chaque joueur | `/api/jeu/sons`, `pb_public/app.js`, `pb_public/index.html`, `perso/LISEZMOI.txt` |
+| 5 | Tableau des candidats : ajout et suppression de candidats dans le tableau, appliqués à l'enregistrement ; colonne Rang retirée ; bloc d'import des sondages déplacé en bas | `pb_public/app.js`, `/api/jeu/admin/tableau` |
+| 6 | Onglets de l'administration : l'onglet cliqué s'affiche tout de suite avec « Chargement… », et une réponse arrivée après un changement d'onglet est ignorée. Avant, la page s'élargissait mais l'ancien onglet restait affiché pendant le calcul des cotes | `vueAdmin`, `router` |
+| 7 | Les cotes calculées sont gardées en cache dans `reglages` tant que les intentions de vote ne changent pas : le tableau s'ouvre sans refaire la simulation | `cotesT1` |
+| 8 | Les paragraphes ne sont plus limités à 65 caractères de large | `pb_public/style.css` |
+

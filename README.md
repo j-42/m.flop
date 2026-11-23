@@ -108,6 +108,7 @@ Côté application :
 | Quoi | Où | Prise en compte |
 |---|---|---|
 | Image d’accueil | `perso/affiche.jpg` | Après reconstruction de l’image |
+| Musique de fond, sons par bord politique, son « Valider » | Dossier `perso/sons/`, voir [Sons et musique](#sons-et-musique) | Après reconstruction de l’image |
 | Nom, sous-titre, grades, calendrier, sons par défaut | `pb_public/config.js` | Après reconstruction de l’image |
 | Guildes, candidats, intentions de vote, paris, résultats | Dans le jeu, Profil puis Administration | Immédiate |
 
@@ -133,13 +134,15 @@ Dates retenues dans le catalogue, à confirmer par le décret de convocation des
 
 ### Le tableau des candidats
 
-Une ligne par candidat : statut, cote des 500 signatures, intentions de vote au 1er et au 2nd tour, scores réels des deux tours. Sous le tableau : vote blanc (en % des votants) et abstention (en % des inscrits) des deux tours.
+Une ligne par candidat : statut, bord politique, cote des 500 signatures, intentions de vote au 1er et au 2nd tour, scores réels des deux tours. Sous le tableau : vote blanc (en % des votants) et abstention (en % des inscrits) des deux tours.
 
-**Import des intentions de vote.** Le serveur du jeu lit le fichier `data/sondages.json` du dépôt public [2027etmoi/2027etmoi](https://github.com/2027etmoi/2027etmoi) (Licence ouverte), qui reprend les sondages du 1er tour déposés à la Commission des sondages sur environ sept semaines. Pour chaque candidat : moyenne des hypothèses de chaque sondage, puis moyenne des sondages. Les candidats sont rapprochés par leur nom ; le compte rendu liste ceux qui n’ont pas pu l’être. Le conteneur doit pouvoir joindre `raw.githubusercontent.com` en HTTPS. Les intentions du 2nd tour se saisissent à la main.
+**Import des intentions de vote.** Le serveur du jeu lit le fichier `data/sondages.json` du dépôt public [2027etmoi/2027etmoi](https://github.com/2027etmoi/2027etmoi) (Licence ouverte), qui reprend les sondages du 1er tour déposés à la Commission des sondages sur environ sept semaines. Pour chaque candidat : moyenne des hypothèses de chaque sondage, puis moyenne des sondages. Les candidats sont rapprochés par leur nom ; le compte rendu liste ceux qui n’ont pas pu l’être. L’import renseigne aussi le bord politique des candidats qui n’en ont pas : celui de la source, les souverainistes en « autre », et l’extrême gauche repérée par le parti (Lutte ouvrière, NPA, Révolution permanente).
+
+**Ajouter ou supprimer un candidat.** Dans le tableau, **Ajouter un candidat** crée une ligne, **Supprimer** marque une ligne : les deux sont appliqués à l’enregistrement. Un candidat qui figure dans un pari où des joueurs ont parié ne peut pas être supprimé : le passer en « Retiré ». Le conteneur doit pouvoir joindre `raw.githubusercontent.com` en HTTPS. Les intentions du 2nd tour se saisissent à la main.
 
 **Cotes calculées.** Pour les paris du 1er tour (en tête, podium, flop 3, pire score), le jeu simule 10 000 fois le scrutin à partir des intentions de vote, avec un écart type de 0,5 + 0,12 × l’intention (environ 4 points pour un candidat à 30 %). Un candidat sans intention compte pour 0,5 %. Les cotes sont bornées entre 1 et 99 %. Pour l’élu, la cote vient de la part du premier finaliste dans les intentions du 2nd tour, avec un écart type de 3,5 points. Les candidats du 1er tour sont ceux au statut « Sur la liste officielle », ou à défaut les déclarés.
 
-**Paris reliés.** Dans l’éditeur d’un pari, le champ **Relié au tableau des candidats** choisit d’où viennent ses réponses, ses cotes et son résultat. Tant que personne n’a parié, les réponses et les cotes suivent le tableau à chaque enregistrement. Ensuite elles sont figées ; seuls de nouveaux noms peuvent encore être ajoutés à un oui/non ou à « Mon vote » ouvert. Les finalistes du 2nd tour sont les deux premiers des scores du 1er tour.
+**Paris reliés.** Dans l’éditeur d’un pari, le champ **Relié au tableau des candidats** choisit d’où viennent ses réponses, ses cotes et son résultat. Tant que personne n’a parié, les réponses et les cotes suivent le tableau à chaque enregistrement. Ensuite elles sont figées ; seuls de nouveaux noms peuvent encore être ajoutés à un oui/non ou à « Mon vote » ouvert. Les finalistes du 2nd tour sont les deux candidats du 1er tour qui ont les meilleurs scores saisis dans la colonne Score T1. Le jeu ne gère pas le cas d’un candidat élu dès le 1er tour.
 
 **Résultats.** Trois cases dans le tableau : liste officielle publiée, résultats du 1er tour définitifs, résultats du 2nd tour définitifs. Une fois la case cochée et le tableau enregistré, les paris reliés et clos sont résolus et les points calculés. Le serveur refait cette vérification toutes les 10 minutes, pour les paris qui ferment après la saisie. Corriger un score ensuite recalcule les points.
 
@@ -151,9 +154,53 @@ Une ligne par candidat : statut, cote des 500 signatures, intentions de vote au 
 
 **Mot de passe oublié** : dans le tableau de bord `/_/`, collection `users`, ouvrir le joueur et saisir un nouveau mot de passe.
 
-**Co-admin** : onglet **Joueurs** de l’administration du jeu.
+**Co-admin, changement de guilde** : onglet **Joueurs** de l’administration du jeu. Changer la guilde d’un joueur fait compter tous ses points pour sa nouvelle guilde.
+
+**Duels** : un joueur lance un seul duel par pari, mais peut être défié par plusieurs joueurs. Le gagnant reçoit 20 points de bonus (`BONUS_DUEL` dans `pb_hooks/jeu_lib.js`), le perdant ne perd rien. Le bonus compte dans le classement, les grades et les trophées.
 
 Les règles complètes, côté joueur, sont dans la page **Règles** de l’application : calcul des points, types de paris, grades, duels, guildes, trophées.
+
+### Sons et musique
+
+Les fichiers son ne sont pas fournis : ils se déposent dans le dossier `perso/`. Utiliser des sons libres de droits ou faits soi-même.
+
+```
+perso/
+  sons/
+    musique.mp3               musique de fond, en boucle
+    extreme_gauche/           un dossier par bord politique
+    gauche/
+    ecolo/
+    centre/
+    droite/
+      cloche.mp3
+      Vive la France 2.mp3
+      applaudissements.ogg
+    extreme_droite/
+    autre/
+    valider/                  sons du bouton « Valider mon pari »
+      valider.mp3
+```
+
+Les fichiers `.gitkeep` des dossiers servent à les garder dans Git quand ils sont vides ; le jeu les ignore.
+
+**Sons par bord.** Quand un joueur choisit un candidat (bulletin, oui ou non, classement, menu de « Mon vote »), le jeu lit le bord de ce candidat dans le tableau des candidats et joue un fichier tiré au hasard dans le dossier de ce bord. Le tirage est refait à chaque clic. Si un nouveau son part avant la fin du précédent, le précédent s’arrête.
+
+- Autant de fichiers que voulu par dossier, noms libres, espaces et accents compris.
+- Formats acceptés : `.mp3`, `.ogg`, `.wav`, `.m4a`. Les autres fichiers sont ignorés, de même que les fichiers dont le nom commence par un point et les sous-dossiers.
+- Durée conseillée : une à deux secondes, pour ne pas gêner quand on enchaîne les clics. Il n’y a pas de limite technique.
+- Dossier vide ou absent, ou candidat sans bord : le petit « pop » habituel.
+
+**Son « Valider mon pari ».** Les fichiers du dossier `perso/sons/valider/`, tirés au hasard s’il y en a plusieurs. Un fichier `perso/sons/valider.mp3` placé directement dans `sons/` est aussi accepté. Sans fichier : le bruit de tampon habituel.
+
+**Musique de fond.** `perso/sons/musique.mp3` (ou `musique.ogg`, `musique.m4a`), jouée en boucle, à faible volume par défaut. Les navigateurs n’autorisent le son qu’après une première action sur la page : la musique démarre au premier clic.
+
+**Volumes.** Le bouton en forme de haut-parleur, en haut de l’écran, ouvre deux curseurs : volume de la musique (25 par défaut, discret) et volume des bruitages (70 par défaut), de 0 à 100. À 0, c’est coupé. Les bruitages regroupent les sons des bords, le son « Valider » et les sons fabriqués par le navigateur. Chaque joueur règle les siens ; ils sont gardés dans son navigateur. Sans fichier de musique, le curseur de la musique est grisé.
+
+**Prise en compte.** À l’ouverture du site, le serveur lit le contenu de ces dossiers et envoie la liste des fichiers au navigateur. Les fichiers sont copiés dans l’image Docker à la construction. Après chaque ajout ou suppression :
+
+1. reconstruire l’image : `docker compose up -d --build` ;
+2. chaque joueur recharge la page.
 
 ## Structure du dépôt
 
